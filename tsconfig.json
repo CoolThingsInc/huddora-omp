@@ -1,11 +1,22 @@
 {
-	"extends": "../../tsconfig.base.json",
 	"compilerOptions": {
+		"target": "ES2022",
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"lib": ["ES2022"],
+		"strict": true,
+		"skipLibCheck": true,
+		"declaration": true,
+		"declarationMap": true,
+		"sourceMap": true,
 		"rootDir": "src",
 		"outDir": "dist",
-		"tsBuildInfoFile": "dist/tsconfig.tsbuildinfo",
-		"skipLibCheck": true
+		"noEmitOnError": true,
+		"esModuleInterop": true,
+		"isolatedModules": true,
+		"verbatimModuleSyntax": true,
+		"types": ["bun"]
 	},
 	"include": ["src/**/*.ts"],
-	"exclude": ["src/**/*.test.ts"]
+	"exclude": ["src/**/*.test.ts", "dist", "node_modules"]
 }

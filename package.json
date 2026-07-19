@@ -5,20 +5,22 @@
 	"description": "OMP plugin for Huddora: room chat via MCP (definition-only) + live inject (/huddora)",
 	"exports": {
 		".": {
-			"types": "./dist/index.d.ts",
-			"default": "./dist/index.js"
+			"types": "./src/index.ts",
+			"default": "./src/index.ts"
 		},
 		"./extension": {
-			"types": "./dist/extension.d.ts",
-			"default": "./dist/extension.js"
+			"types": "./src/extension.ts",
+			"default": "./src/extension.ts"
 		}
 	},
 	"files": [
-		"dist",
 		"src",
 		"mcp.json",
 		".mcp.json",
-		"README.md"
+		"README.md",
+		"LICENSE",
+		"package.json",
+		"tsconfig.json"
 	],
 	"omp": {
 		"extensions": [
@@ -26,9 +28,9 @@
 		]
 	},
 	"scripts": {
-		"build": "tsc -b",
-		"typecheck": "tsc -b --pretty false",
-		"test": "bun test src"
+		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"test": "bun test src",
+		"build": "tsc -p tsconfig.json"
 	},
 	"peerDependencies": {
 		"@oh-my-pi/pi-coding-agent": ">=17.0.0"
@@ -52,5 +54,8 @@
 		"huddora",
 		"mcp",
 		"plugin"
-	]
+	],
+	"engines": {
+		"node": ">=20"
+	}
 }
