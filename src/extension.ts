@@ -178,13 +178,13 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		const attempt = async () => {
 			if (shutdown || state.paused) return;
 			const status = await getHuddoraConnectionStatus();
-			if (status !== lastOnboardStatus && (status === "connected" || status === "connecting" || lastOnboardStatus === null)) {
-				// Real status transitions restart the bounded observer budget.
-				if (lastOnboardStatus !== null && status !== lastOnboardStatus) onboardingAttempts = 0;
+			// Any real status change re-arms the aggressive budget (covers late /mcp reauth).
+			if (status !== lastOnboardStatus) {
+				if (lastOnboardStatus !== null) onboardingAttempts = 0;
 				lastOnboardStatus = status;
 			}
 			const connected = await autoConnect(ctx);
-			if (connected || shutdown || onboardingAttempts >= 6) {
+			if (connected || shutdown || state.paused) {
 				if (onboardingTimer) {
 					ctx.clearTimer(onboardingTimer);
 					onboardingTimer = null;
@@ -192,7 +192,11 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 				return;
 			}
 			onboardingAttempts += 1;
-			onboardingTimer = ctx.setTimeout(() => void attempt(), Math.min(30_000, 1_000 * 2 ** onboardingAttempts));
+			// Aggressive retries first, then slow re-arm forever so a later reauth/credential
+			// write is observed without requiring /huddora connect or a session restart.
+			const delay =
+				onboardingAttempts <= 6 ? Math.min(30_000, 1_000 * 2 ** onboardingAttempts) : 15_000;
+			onboardingTimer = ctx.setTimeout(() => void attempt(), delay);
 		};
 		void attempt();
 	}
@@ -699,7 +703,16 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 				case "doctor": {
 					const config = await loadProjectConfig(ctx.cwd);
 					const connection = await getHuddoraConnectionStatus();
-					ctx.ui.notify(`Huddora doctor\nMCP: ${connection}\nConfig: ${config.ok ? (config.exists ? "valid" : "missing") : config.error}\nRoom: ${state.roomName ?? "none"}\nNext: ${connection === "connected" ? (state.roomId ? "ready" : "run /huddora room") : "run /mcp reauth huddora"}`, connection === "connected" ? "info" : "warning");
+					const transportReady = connection === "connected" || delivery === "bridge";
+					const next = state.roomId
+						? "ready"
+						: transportReady
+							? "wait for auto-bind or run /huddora room"
+							: "run /mcp reauth huddora";
+					ctx.ui.notify(
+						`Huddora doctor\nMCP: ${connection}\nConfig: ${config.ok ? (config.exists ? "valid" : "missing") : config.error}\nRoom: ${state.roomName ?? "none"}\nDelivery: ${delivery}\nNext: ${next}`,
+						state.roomId || transportReady ? "info" : "warning",
+					);
 					return;
 				}
 				case "bridge": {
