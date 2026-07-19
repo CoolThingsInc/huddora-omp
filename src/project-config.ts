@@ -10,7 +10,8 @@ export type ProjectConfig = { version: 1; default_room_id: string | null };
 export const DEFAULT_PROJECT_CONFIG: ProjectConfig = { version: PROJECT_CONFIG_VERSION, default_room_id: null };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const KEYS = new Set(["version", "default_room_id"]);
+const KEYS = new Set(["$schema", "version", "default_room_id"]);
+const PINNED_SCHEMA = "https://huddora.coolthings.fyi/schemas/project-config-v1.json";
 const LOCK_RETRY_MS = 20;
 const LOCK_RETRIES = 25;
 
@@ -66,6 +67,9 @@ export function parseProjectConfig(value: unknown): ProjectConfig {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("config must be a JSON object");
 	const object = value as Record<string, unknown>;
 	for (const key of Object.keys(object)) if (!KEYS.has(key)) throw new Error(`unknown config key: ${key}`);
+	if ("$schema" in object && object.$schema !== PINNED_SCHEMA) {
+		throw new Error(`$schema must be ${PINNED_SCHEMA} when present`);
+	}
 	if (object.version !== PROJECT_CONFIG_VERSION) throw new Error(`version must be ${PROJECT_CONFIG_VERSION}`);
 	const room = object.default_room_id;
 	if (room !== null && (typeof room !== "string" || !UUID_RE.test(room))) {

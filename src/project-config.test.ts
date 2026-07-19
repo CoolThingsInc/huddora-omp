@@ -43,6 +43,20 @@ describe("project config", () => {
 			"unknown config key",
 		);
 		expect(() => parseProjectConfig({ version: 1, default_room_id: "not-a-uuid" })).toThrow("UUID");
+		expect(
+			parseProjectConfig({
+				$schema: "https://huddora.coolthings.fyi/schemas/project-config-v1.json",
+				version: 1,
+				default_room_id: null,
+			}),
+		).toEqual({ version: 1, default_room_id: null });
+		expect(() =>
+			parseProjectConfig({
+				$schema: "https://evil.example/schema.json",
+				version: 1,
+				default_room_id: null,
+			}),
+		).toThrow("$schema");
 	});
 
 	test("writes atomically under the supplied project root with private mode", async () => {
