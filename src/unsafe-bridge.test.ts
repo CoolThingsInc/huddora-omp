@@ -105,6 +105,40 @@ describe("compatibility bridge credential boundary", () => {
 		fetchSpy.mockRestore();
 	});
 
+	test("rereads once for each independent 401 request", async () => {
+		const root = await fixture();
+		await addRow(root, "default", Date.now() + 60_000);
+		const fetchSpy = spyOn(globalThis, "fetch");
+		fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }), { status: 200, headers: { "Mcp-Session-Id": "fixture-session" } }));
+		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 202 }));
+		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 401 }));
+		fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ jsonrpc: "2.0", id: 2, result: {} }), { status: 200 }));
+		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 401 }));
+		fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ jsonrpc: "2.0", id: 3, result: {} }), { status: 200 }));
+		const bridge = new UnsafeHuddoraBridge("default", { homeDir: root });
+		expect((await bridge.start(() => {})).ok).toBe(true);
+		expect((await bridge.callTool("room_list", {})).ok).toBe(true);
+		expect((await bridge.callTool("room_list", {})).ok).toBe(true);
+		fetchSpy.mockRestore();
+	});
+
+	test("rereads before a request when its cached expiry elapses", async () => {
+		const root = await fixture();
+		await addRow(root, "default", Date.now() + 50);
+		const fetchSpy = spyOn(globalThis, "fetch");
+		fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }), { status: 200, headers: { "Mcp-Session-Id": "fixture-session" } }));
+		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 202 }));
+		const bridge = new UnsafeHuddoraBridge("default", { homeDir: root });
+		expect((await bridge.start(() => {})).ok).toBe(true);
+		await new Promise(resolve => setTimeout(resolve, 60));
+		const db = new Database(path.join(root, ".omp", "agent", "agent.db"));
+		db.run("UPDATE auth_credentials SET data = ?", [JSON.stringify({ access: "fixture-access", expires: Date.now() + 60_000 })]);
+		db.close();
+		fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ jsonrpc: "2.0", id: 2, result: {} }), { status: 200 }));
+		expect((await bridge.callTool("room_list", {})).ok).toBe(true);
+		fetchSpy.mockRestore();
+	});
+
 
 	test("closes its session with the token only in an Authorization header", async () => {
 		const root = await fixture();
@@ -126,7 +160,7 @@ describe("compatibility bridge credential boundary", () => {
 		expect(String(close?.[1]?.body ?? "")).not.toContain("fixture-access");
 		fetchSpy.mockRestore();
 	});
-	test("rejects a symlink and writable database path", async () => {
+	test("rejects a symlink, writable database, or unsafe ancestor path", async () => {
 		const symlinkRoot = await fixture();
 		const agent = path.join(symlinkRoot, ".omp", "agent");
 		const target = path.join(symlinkRoot, "target.db");
@@ -137,5 +171,9 @@ describe("compatibility bridge credential boundary", () => {
 		const writableRoot = await fixture();
 		await fs.chmod(path.join(writableRoot, ".omp", "agent", "agent.db"), 0o622);
 		expect(await new UnsafeHuddoraBridge("default", { homeDir: writableRoot }).status()).toBe("unsafe_db");
+
+		const unsafeAncestor = await fixture();
+		await fs.chmod(path.join(unsafeAncestor, ".omp"), 0o722);
+		expect(await new UnsafeHuddoraBridge("default", { homeDir: unsafeAncestor }).status()).toBe("unsafe_db");
 	});
 });

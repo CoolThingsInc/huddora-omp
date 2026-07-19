@@ -32,7 +32,8 @@ export class UnsafeHuddoraBridge {
 	#sseAbort: AbortController | null = null;
 	#nextId = 1;
 	#onNotification: NotificationHandler | null = null;
-	#rereadAttempted = false;
+	#sseRetry: ReturnType<typeof setTimeout> | null = null;
+	#closed = false;
 
 	constructor(
 		private readonly profile = process.env.OMP_PROFILE ?? process.env.PI_PROFILE ?? "default",
@@ -49,13 +50,14 @@ export class UnsafeHuddoraBridge {
 	}
 
 	async start(onNotification: NotificationHandler): Promise<UnsafeBridgeResult<void>> {
+		this.#closed = false;
 		this.#onNotification = onNotification;
 		const token = await this.#loadToken();
 		if (!token.ok) return token;
 		const initialized = await this.#request("initialize", {
 			protocolVersion: "2025-03-26",
 			capabilities: {},
-			clientInfo: { name: "huddora-omp-unsafe-bridge", version: "0.2.0" },
+			clientInfo: { name: "huddora-omp-compatibility-bridge", version: "0.2.0" },
 		});
 		if (!initialized.ok) return initialized;
 		await this.#notify("notifications/initialized", {});
@@ -74,15 +76,17 @@ export class UnsafeHuddoraBridge {
 	}
 
 	async close(): Promise<void> {
+		this.#closed = true;
 		this.#sseAbort?.abort();
 		this.#sseAbort = null;
+		if (this.#sseRetry) clearTimeout(this.#sseRetry);
+		this.#sseRetry = null;
 		const token = this.#accessToken;
 		const sessionId = this.#sessionId;
 		this.#accessToken = null;
 		this.#expiresAt = 0;
 		this.#sessionId = null;
 		this.#onNotification = null;
-		this.#rereadAttempted = false;
 		if (!token || !sessionId) return;
 		try {
 			await fetch(HUDDORA_URL, {
@@ -103,8 +107,17 @@ export class UnsafeHuddoraBridge {
 		return { ok: true, data: undefined };
 	}
 
-	async #request(method: string, params: Record<string, unknown>): Promise<UnsafeBridgeResult<unknown>> {
-		if (!this.#accessToken || this.#expiresAt <= Date.now()) return { ok: false, message: unsafeStatusMessage("expired") };
+	async #request(
+		method: string,
+		params: Record<string, unknown>,
+		reloaded = false,
+	): Promise<UnsafeBridgeResult<unknown>> {
+		if (!this.#accessToken || this.#expiresAt <= Date.now()) {
+			if (reloaded) return { ok: false, message: unsafeStatusMessage("expired") };
+			this.#accessToken = null;
+			const loaded = await this.#loadToken();
+			return loaded.ok ? this.#request(method, params, true) : loaded;
+		}
 		const id = this.#nextId++;
 		try {
 			const response = await fetch(HUDDORA_URL, {
@@ -114,22 +127,21 @@ export class UnsafeHuddoraBridge {
 			});
 			const sessionId = response.headers.get("Mcp-Session-Id");
 			if (sessionId) this.#sessionId = sessionId;
-			if (response.status === 401 && !this.#rereadAttempted) {
-				this.#rereadAttempted = true;
+			if (response.status === 401 && !reloaded) {
 				this.#accessToken = null;
 				const loaded = await this.#loadToken();
-				return loaded.ok ? this.#request(method, params) : loaded;
+				return loaded.ok ? this.#request(method, params, true) : loaded;
 			}
 			if (response.status === 401 || response.status === 403) {
 				this.#accessToken = null;
 				return { ok: false, message: unsafeStatusMessage("reauth_required") };
 			}
-			if (!response.ok) return { ok: false, message: `Unsafe bridge HTTP ${response.status}` };
+			if (!response.ok) return { ok: false, message: `Compatibility bridge HTTP ${response.status}` };
 			const body = (await response.json()) as JsonRpcResponse;
-			if (body.error) return { ok: false, message: "Unsafe bridge MCP tool error" };
+			if (body.error) return { ok: false, message: "Compatibility bridge MCP tool error" };
 			return { ok: true, data: body.result ?? null };
 		} catch {
-			return { ok: false, message: "Unsafe bridge transport error" };
+			return { ok: false, message: "Compatibility bridge transport error" };
 		}
 	}
 
@@ -147,16 +159,20 @@ export class UnsafeHuddoraBridge {
 	}
 
 	async #startSse(): Promise<void> {
-		if (!this.#accessToken || !this.#sessionId || this.#sseAbort) return;
+		if (!this.#accessToken || !this.#sessionId || this.#sseAbort || this.#closed) return;
 		const abort = new AbortController();
 		this.#sseAbort = abort;
+		let retry = false;
 		try {
 			const response = await fetch(HUDDORA_URL, {
 				method: "GET",
 				headers: this.#headers({ Accept: "text/event-stream" }),
 				signal: abort.signal,
 			});
-			if (!response.ok || !response.body) return;
+			if (!response.ok || !response.body) {
+				retry = response.status !== 401 && response.status !== 403;
+				return;
+			}
 			const decoder = new TextDecoder();
 			let buffer = "";
 			for await (const chunk of response.body) {
@@ -182,11 +198,22 @@ export class UnsafeHuddoraBridge {
 					}
 				}
 			}
+			retry = true;
 		} catch {
-			// Polling remains active; no retry loop is started after explicit close.
+			retry = !abort.signal.aborted;
 		} finally {
 			if (this.#sseAbort === abort) this.#sseAbort = null;
+			if (retry && !this.#closed && this.#accessToken && this.#sessionId) this.#scheduleSseRetry();
 		}
+	}
+
+	#scheduleSseRetry(): void {
+		if (this.#sseRetry || this.#closed) return;
+		this.#sseRetry = setTimeout(() => {
+			this.#sseRetry = null;
+			void this.#startSse();
+		}, 3_000);
+		this.#sseRetry.unref?.();
 	}
 
 	#headers(base: Record<string, string>): Record<string, string> {
@@ -198,21 +225,21 @@ export class UnsafeHuddoraBridge {
 	async #readToken(): Promise<{ ok: true; value: Token } | { ok: false; status: UnsafeBridgeStatus }> {
 		if (process.platform === "win32" || !PROFILE_NAME.test(this.profile)) return { ok: false, status: "unsupported" };
 		const root = path.join(this.#homeDir, ".omp");
-		const expectedRoot =
-			this.profile === "default"
-				? path.join(root, "agent")
-				: path.join(root, "profiles", this.profile, "agent");
-		const dbPath = path.join(expectedRoot, "agent.db");
+		const pathParts = this.profile === "default" ? [root, path.join(root, "agent")] : [root, path.join(root, "profiles"), path.join(root, "profiles", this.profile), path.join(root, "profiles", this.profile, "agent")];
+		const dbPath = path.join(pathParts.at(-1)!, "agent.db");
 		try {
-			const [dir, db] = await Promise.all([fs.lstat(expectedRoot), fs.lstat(dbPath)]);
-			if (!dir.isDirectory() || dir.isSymbolicLink() || !db.isFile() || db.isSymbolicLink()) {
+			for (const segment of pathParts) {
+				const stat = await fs.lstat(segment);
+				if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o022) !== 0 || (typeof process.getuid === "function" && stat.uid !== process.getuid())) {
+					return { ok: false, status: "unsafe_db" };
+				}
+			}
+			const db = await fs.lstat(dbPath);
+			if (!db.isFile() || db.isSymbolicLink() || (db.mode & 0o022) !== 0 || (typeof process.getuid === "function" && db.uid !== process.getuid())) {
 				return { ok: false, status: "unsafe_db" };
 			}
-			if ((dir.mode & 0o022) !== 0 || (db.mode & 0o022) !== 0 || (typeof process.getuid === "function" && db.uid !== process.getuid())) {
-				return { ok: false, status: "unsafe_db" };
-			}
-			const [realRoot, realDb] = await Promise.all([fs.realpath(expectedRoot), fs.realpath(dbPath)]);
-			if (!realDb.startsWith(`${realRoot}${path.sep}`)) return { ok: false, status: "unsafe_db" };
+			const [realAgent, realDb] = await Promise.all([fs.realpath(pathParts.at(-1)!), fs.realpath(dbPath)]);
+			if (!realDb.startsWith(`${realAgent}${path.sep}`)) return { ok: false, status: "unsafe_db" };
 			const dbHandle = new Database(realDb, { readonly: true });
 			try {
 				const columns = dbHandle.query("PRAGMA table_info(auth_credentials)").all();

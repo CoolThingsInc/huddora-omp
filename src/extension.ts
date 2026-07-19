@@ -614,21 +614,30 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 					const arg = (rest[0] ?? "status").toLowerCase();
 					if (arg === "off") {
 						if (state.roomId && bridge) await huddoraCall("room_unwatch", { room_id: state.roomId });
+						clearTimer(ctx);
 						persist({ ...state, bridgeDisabled: true });
 						if (bridge) await bridge.close();
 						bridge = null;
 						setCompatibilityBridge(null);
-						delivery = "poll";
-						ctx.ui.notify("Compatibility bridge off. Safe host MCP remains preferred; background polling resumes when it is available.", "info");
+						delivery = "unavailable";
+						ctx.ui.notify("Compatibility bridge off. Automatic delivery is unavailable until host MCP or the bridge is enabled.", "info");
 						return;
 					}
 					if (arg === "on") {
 						persist({ ...state, bridgeDisabled: false, bridgeDisclosureSeen: true });
 						const active = await ensureBridge(ctx);
+						if (active) await startDelivery(ctx);
 						ctx.ui.notify(active ? "Compatibility bridge enabled." : "Compatibility bridge unavailable.", active ? "info" : "error");
 						return;
 					}
-					ctx.ui.notify(state.bridgeDisabled ? "Compatibility bridge: off (user disabled)." : bridge ? "Compatibility bridge: active." : "Compatibility bridge: automatic when host MCP is unavailable.", "info");
+					ctx.ui.notify(
+						state.bridgeDisabled
+							? "Compatibility bridge: off (user disabled)."
+							: bridge
+								? "Compatibility bridge: active."
+								: "Compatibility bridge: automatic when host MCP is unavailable.",
+						"info",
+					);
 					return;
 				}
 				case "room": {
@@ -688,7 +697,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 				case "pause":
 					persist({ ...state, paused: true });
 					clearTimer(ctx);
-					if (state.roomId) void callHuddoraTool("room_unwatch", { room_id: state.roomId });
+					if (state.roomId) void huddoraCall("room_unwatch", { room_id: state.roomId });
 					ctx.ui.notify("Paused.", "info");
 					return;
 				case "resume":
@@ -707,7 +716,10 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 				}
 				case "disconnect":
 					clearTimer(ctx);
-					if (state.roomId) void callHuddoraTool("room_unwatch", { room_id: state.roomId });
+					if (state.roomId) await huddoraCall("room_unwatch", { room_id: state.roomId });
+					if (bridge) await bridge.close();
+					bridge = null;
+					setCompatibilityBridge(null);
 					persist(defaultState());
 					injectedCursors.clear();
 					rateGuard = defaultRateGuard();
@@ -715,9 +727,10 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 					return;
 				default:
 					ctx.ui.notify(
-						"Usage: /huddora connect|room|status|push on|off|pause|resume|sync|disconnect",
+						"Usage: /huddora connect|room|status|bridge on|off|pause|resume|sync|disconnect",
 						"warning",
 					);
+					return;
 			}
 		},
 	});
