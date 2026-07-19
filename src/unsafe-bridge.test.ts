@@ -139,7 +139,7 @@ describe("compatibility bridge credential boundary", () => {
 		fetchSpy.mockRestore();
 	});
 
-	test("marks SSE 401 reauth-required without token body leakage", async () => {
+	test("recovers the first SSE 401, rejects the second, and redacts fixture access", async () => {
 		const root = await fixture();
 		await addRow(root, "default", Date.now() + 60_000);
 		const scheduled: Array<() => Promise<void>> = [];
@@ -156,12 +156,40 @@ describe("compatibility bridge credential boundary", () => {
 		});
 		expect((await bridge.start(() => {})).ok).toBe(true);
 		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 401 }));
+		fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ jsonrpc: "2.0", id: 2, result: {} }), { status: 200, headers: { "Mcp-Session-Id": "replacement-session" } }));
+		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 202 }));
 		await scheduled[0]!();
+		expect(scheduled).toHaveLength(2);
+		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 401 }));
+		await scheduled[1]!();
 		expect(await bridge.status()).toBe("reauth_required");
 		for (const [url, options] of fetchSpy.mock.calls) {
 			expect(String(url)).not.toContain("fixture-access");
 			expect(String(options?.body ?? "")).not.toContain("fixture-access");
 		}
+		fetchSpy.mockRestore();
+	});
+
+	test("delivers validated SSE notifications to the supplied handler", async () => {
+		const root = await fixture();
+		await addRow(root, "default", Date.now() + 60_000);
+		const scheduled: Array<() => Promise<void>> = [];
+		const received: Array<[string, unknown]> = [];
+		const fetchSpy = spyOn(globalThis, "fetch");
+		fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }), { status: 200, headers: { "Mcp-Session-Id": "fixture-session" } }));
+		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 202 }));
+		fetchSpy.mockResolvedValueOnce(new Response('data: {"method":"notifications/huddora/messages","params":{"room_id":"r"}}\n\n', { status: 200 }));
+		const bridge = new UnsafeHuddoraBridge("default", {
+			homeDir: root,
+			schedule: run => {
+				scheduled.push(run as () => Promise<void>);
+				return run;
+			},
+			cancelSchedule: () => {},
+		});
+		expect((await bridge.start((method, params) => received.push([method, params]))).ok).toBe(true);
+		await scheduled[0]!();
+		expect(received).toEqual([["notifications/huddora/messages", { room_id: "r" }]]);
 		fetchSpy.mockRestore();
 	});
 

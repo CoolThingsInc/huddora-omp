@@ -68,6 +68,7 @@ export class UnsafeHuddoraBridge {
 	async start(onNotification: NotificationHandler): Promise<UnsafeBridgeResult<void>> {
 		this.#closed = false;
 		this.#sseAuthRecovered = false;
+		this.#onNotification = onNotification;
 		const token = await this.#loadToken();
 		if (!token.ok) return token;
 		const initialized = await this.#request("initialize", {
@@ -193,8 +194,7 @@ export class UnsafeHuddoraBridge {
 			});
 			if (!response.ok || !response.body) {
 				if (response.status === 401 || response.status === 403) {
-					this.#accessToken = null;
-					this.#reauthRequired = true;
+					restartAfterAuth = await this.#recoverSseAuth();
 					return;
 				}
 				retry = true;
