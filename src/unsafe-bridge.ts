@@ -74,7 +74,7 @@ export class UnsafeHuddoraBridge {
 		const initialized = await this.#request("initialize", {
 			protocolVersion: "2025-03-26",
 			capabilities: {},
-			clientInfo: { name: "huddora-omp-compatibility-bridge", version: "0.3.0" },
+			clientInfo: { name: "huddora-omp-compatibility-bridge", version: "0.3.1" },
 		});
 		if (!initialized.ok) return initialized;
 		await this.#notify("notifications/initialized", {});

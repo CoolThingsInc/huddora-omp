@@ -4,7 +4,7 @@
  * Primary (architecture H): MCP SSE notifications/huddora/messages → sendMessage
  *   active: deliverAs steer; idle: nextTurn + triggerTurn
  * Notify: sole-consumer setOnNotification (default on); chain if getter exists
- * Safety: host callTool poll/long-poll always (recovery)
+ * Safety: compatibility bridge only (profile access token) + poll recovery
  * Auth: definition-only mcp.json + /mcp reauth (no token scrape)
  */
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
@@ -19,14 +19,11 @@ import { COLLABORATION_GUIDANCE, COLLABORATION_GUIDANCE_VERSION, COLLABORATION_H
 import { boundMessages, filterOwnMessages, formatRoomChatInjection, maxCursor } from "./format";
 import {
 	callHuddoraTool,
-	getHostMcpManager,
 	getHuddoraConnectionStatus,
 	mcpRoomList,
-	resolveHostMcp,
 	setCompatibilityBridge,
 } from "./mcp-client";
 import { parseHuddoraMessagesNotification } from "./notifications";
-import { installChainedNotificationHandler, type NotifyHook } from "./notify-hook";
 import { advanceCursor, markError, nextPollDelayMs, restoreStateFromBranch } from "./state";
 import { UnsafeHuddoraBridge, type UnsafeBridgeResult } from "./unsafe-bridge";
 import {
@@ -39,7 +36,9 @@ import {
 import { bootstrapRoom, durablePayload, longPollWaitMs, pullAndFormat } from "./sync";
 import {
 	decideRoomBinding,
+	doctorNextStep,
 	nextOnboardingDelayMs,
+	roomToolFailureMessage,
 	shouldResetOnboardingBudget,
 } from "./onboarding";
 import {
@@ -67,16 +66,13 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 	let inFlight = false;
 	let shutdown = false;
 	let nextDueAt = 0;
-	let hostMode: "host_manager" | "unavailable" | "unknown" = "unknown";
-	let delivery: "notifications" | "poll" | "bridge" | "unavailable" | "unknown" = "unknown";
-	let notifyHook: NotifyHook | null = null;
+	let delivery: "poll" | "bridge" | "unavailable" | "unknown" = "unknown";
 	const injectedCursors = new Set<number>();
 	let pendingBatch: RoomMessage[] = [];
 	let pendingNextCursor: number | null = null;
 	let liveCtx: ExtensionContext | null = null;
 	let rateGuard: RateGuardState = defaultRateGuard();
 	let lastPushAt: number | null = null;
-	let pushWarnOnce = false;
 	let bridge: UnsafeHuddoraBridge | null = null;
 	let heartbeatInFlight = false;
 	let onboardingTimer: TimerHandle | null = null;
@@ -150,11 +146,8 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 				injectGuidance(ctx, root);
 				return true;
 			}
-			const mode = await ensureHostMode();
-			if (mode === "host_manager") {
-				const status = await getHuddoraConnectionStatus();
-				if (status !== "connected") return false;
-			} else if (!(await ensureBridge(ctx))) {
+			// Bridge-only: ensure compatibility bridge before listing/binding rooms.
+			if (!(await ensureTransport(ctx))) {
 				return false;
 			}
 			let rooms: Array<{ room_id: string }> = [];
@@ -336,14 +329,6 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		}, DEBOUNCE_MS);
 	}
 
-	async function ensureHostMode(): Promise<"host_manager" | "unavailable"> {
-		// `unavailable` is a lifecycle state, not a terminal capability result.
-		// Retry command/session entry points after host MCP init or /mcp reauth.
-		if (hostMode === "host_manager") return hostMode;
-		const r = await resolveHostMcp();
-		hostMode = r.mode;
-		return hostMode;
-	}
 
 	async function ensureBridge(ctx: ExtensionContext): Promise<boolean> {
 		if (state.bridgeDisabled) return false;
@@ -382,51 +367,19 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		return true;
 	}
 
+	/** Plugin tools always use the compatibility bridge. */
+	async function ensureTransport(ctx: ExtensionContext): Promise<boolean> {
+		return ensureBridge(ctx);
+	}
+
 	async function huddoraCall(toolName: string, args: Record<string, unknown> = {}): Promise<UnsafeBridgeResult<unknown>> {
-		const mode = await ensureHostMode();
-		if (mode === "host_manager") {
-			const result = await callHuddoraTool(toolName, args);
-			return result.ok ? result : { ok: false, message: result.error.message };
-		}
+		// Bridge-only tool path.
+		const result = await callHuddoraTool(toolName, args);
+		if (result.ok) return result;
 		if (bridge) return bridge.callTool(toolName, args);
-		return { ok: false, message: "Huddora MCP client unavailable." };
+		return { ok: false, message: result.error.message };
 	}
 
-	async function hookNotifications(ctx: ExtensionContext): Promise<boolean> {
-		if (!state.pushEnabled) {
-			notifyHook?.restore();
-			notifyHook = null;
-			return false;
-		}
-		if (notifyHook?.installed) return true;
-		const manager = await getHostMcpManager();
-		if (!manager) return false;
-
-		// Architecture H: sole-consumer default (user installed for chat push).
-		notifyHook = installChainedNotificationHandler(
-			manager,
-			(serverName, method, params) => {
-				// Strict filter — never claim exclusivity security; only process Huddora chat.
-				if (serverName !== "huddora") return;
-				const parsed = parseHuddoraMessagesNotification(method, params);
-				if (!parsed) return;
-				if (state.roomId && parsed.roomId !== state.roomId) return;
-				const c = liveCtx ?? ctx;
-				enqueueMessages(c, parsed.messages, parsed.nextCursor);
-			},
-			{ soleConsumer: true },
-		);
-		if (!notifyHook.installed) return false;
-		delivery = "notifications";
-		if (notifyHook.mode === "sole_consumer" && !pushWarnOnce) {
-			pushWarnOnce = true;
-			ctx.ui.notify(
-				"Huddora: live push on (OMP notification slot). Other MCP notify listeners may need /huddora push off.",
-				"info",
-			);
-		}
-		return true;
-	}
 
 	async function callRegister(): Promise<boolean> {
 		const res = await huddoraCall("agent_register", {
@@ -437,7 +390,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 					: "OMP agent",
 			harness: "omp",
 			extension_version: PLUGIN_VERSION,
-			delivery_mode: delivery === "notifications" || delivery === "bridge" ? "mcp_push" : "poll",
+			delivery_mode: delivery === "bridge" ? "mcp_push" : "poll",
 		});
 		if (!res.ok || !res.data || typeof res.data !== "object") {
 			persist(markError(state, res.ok === false ? res.message : "agent_register_failed"));
@@ -462,7 +415,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		if (shutdown || state.paused || heartbeatInFlight) return;
 		heartbeatInFlight = true;
 		try {
-			const mode = delivery === "notifications" || delivery === "bridge" ? "mcp_push" : "poll";
+			const mode = delivery === "bridge" ? "mcp_push" : "poll";
 			if (!state.selfAgentId) {
 				if (await callRegister()) scheduleHeartbeat(liveCtx!);
 				return;
@@ -505,7 +458,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 			delivery = "poll";
 			return;
 		}
-		delivery = bridge ? "bridge" : "notifications";
+		delivery = "bridge";
 	}
 
 	function schedulePoll(ctx: ExtensionContext, delayMs?: number) {
@@ -514,7 +467,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 			timer = null;
 		}
 		if (shutdown || !state.roomId || state.paused) return;
-		const base = delivery === "notifications" ? Math.max(POLL_BASE_MS * 4, 30_000) : POLL_BASE_MS;
+		const base = delivery === "bridge" ? Math.max(POLL_BASE_MS * 4, 30_000) : POLL_BASE_MS;
 		const delay = delayMs ?? nextPollDelayMs(state, base, POLL_MAX_MS);
 		nextDueAt = Date.now() + delay;
 		timer = ctx.setInterval(() => {
@@ -531,8 +484,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 			if (!shutdown && state.roomId && !state.paused) schedulePoll(ctx);
 			return;
 		}
-		const mode = await ensureHostMode();
-		if (mode !== "host_manager" && !bridge && !(await ensureBridge(ctx))) {
+		if (!(await ensureTransport(ctx))) {
 			delivery = "unavailable";
 			return;
 		}
@@ -560,8 +512,9 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 
 	async function syncNow(): Promise<string> {
 		if (!state.roomId) return "No room selected. /huddora room <id>";
-		const mode = await ensureHostMode();
-		if (mode !== "host_manager" && !bridge) return "Huddora compatibility bridge is disabled or unavailable.";
+		if (!bridge && !(liveCtx && (await ensureBridge(liveCtx)))) {
+			return "Huddora compatibility bridge is disabled or unavailable.";
+		}
 		if (inFlight) return "In flight; retry shortly.";
 		inFlight = true;
 		try {
@@ -590,29 +543,14 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 
 	async function statusText(): Promise<string> {
 		const conn = await getHuddoraConnectionStatus();
-		await ensureHostMode();
-		const room = state.roomId ? `${state.roomName ?? "?"} (${state.roomId})` : "(none)";
-		const pushLabel = !state.pushEnabled
-			? "off (poll only)"
-			: notifyHook?.mode === "sole_consumer"
-				? "push (exclusive OMP notification slot)"
-				: notifyHook?.mode === "chained_setOnNotification"
-					? "push (chained)"
-					: notifyHook?.mode === "onNotification"
-						? "push (multi-subscriber)"
-						: notifyHook?.installed
-							? "push"
-							: "off (not installed)";
-		const lastPush =
-			lastPushAt === null ? "never" : `${Math.max(0, Date.now() - lastPushAt)}ms ago`;
 		const bridgeStatus = state.bridgeDisabled
-			? "off (user disabled)"
+			? "off (user disabled — plugin tools unavailable)"
 			: bridge
-				? "active — reads current Huddora access token only from this profile's local database"
-				: "automatic when safe host MCP API is unavailable";
+				? "active — only tool path (profile OAuth access token only)"
+				: "required — auto-starts for plugin tools";
 		return [
 			`Huddora: ${state.roomName ?? "no room"} · ${delivery} · ${state.paused ? "paused" : "active"}`,
-			`MCP: ${conn}; agent: ${state.selfAgentId ? "registered" : "not registered"}; bridge: ${bridgeStatus}.`,
+			`Plugin: ${conn}; agent: ${state.selfAgentId ? "registered" : "not registered"}; bridge: ${bridgeStatus}.`,
 			state.lastError ? `Next: ${state.lastError}` : state.roomId ? "Ready." : "Next: /huddora room",
 		].join("\n");
 	}
@@ -620,22 +558,18 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 	async function startDelivery(ctx: ExtensionContext) {
 		liveCtx = ctx;
 		if (!state.roomId || state.paused) return;
-		const mode = await ensureHostMode();
-		const hooked = mode === "host_manager" ? await hookNotifications(ctx) : false;
-		if (mode === "host_manager" && bridge) {
-			await bridge.close();
-			bridge = null;
-			setCompatibilityBridge(null);
-		}
-		if (!hooked && mode !== "host_manager" && !(await ensureBridge(ctx))) {
+		if (!(await ensureBridge(ctx))) {
 			delivery = "unavailable";
-			ctx.ui.notify("Huddora: compatibility bridge unavailable; run /mcp reauth huddora or /huddora bridge on.", "error");
+			ctx.ui.notify(
+				"Huddora: compatibility bridge unavailable; run /huddora bridge on (reauth only if OAuth expired).",
+				"error",
+			);
 			return;
 		}
-		if (hooked || bridge) await ensureWatch();
+		await ensureWatch();
 		await ensureAgentRegistered();
 		scheduleHeartbeat(ctx);
-		schedulePoll(ctx, hooked ? 45_000 : 1_000);
+		schedulePoll(ctx, 1_000);
 	}
 
 	pi.on("session_start", async (_e, ctx) => {
@@ -675,8 +609,6 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		inFlight = false;
 		liveCtx = null;
 		if (state.roomId) await huddoraCall("room_unwatch", { room_id: state.roomId });
-		notifyHook?.restore();
-		notifyHook = null;
 		if (bridge) {
 			await bridge.close();
 			bridge = null;
@@ -720,14 +652,17 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 				case "doctor": {
 					const config = await loadProjectConfig(ctx.cwd);
 					const connection = await getHuddoraConnectionStatus();
-					const transportReady = connection === "connected" || delivery === "bridge";
-					const next = state.roomId
-						? "ready"
-						: transportReady
-							? "wait for auto-bind or run /huddora room"
-							: "run /mcp reauth huddora";
+					const deliveryLabel = bridge ? "bridge" : delivery;
+					const transportReady = deliveryLabel === "bridge" || Boolean(bridge);
+					const next = doctorNextStep({
+						roomId: state.roomId,
+						connection,
+						delivery: deliveryLabel,
+						bridgeDisabled: state.bridgeDisabled,
+						bridgeError: state.lastError,
+					});
 					ctx.ui.notify(
-						`Huddora doctor\nMCP: ${connection}\nConfig: ${config.ok ? (config.exists ? "valid" : "missing") : config.error}\nRoom: ${state.roomName ?? "none"}\nDelivery: ${delivery}\nNext: ${next}`,
+						`Huddora doctor\nPlugin: ${connection}\nBridge: ${state.bridgeDisabled ? "disabled" : bridge ? "active" : "not started"}\nConfig: ${config.ok ? (config.exists ? "valid" : "missing") : config.error}\nRoom: ${state.roomName ?? "none"}\nDelivery: ${deliveryLabel}\nNext: ${next}`,
 						state.roomId || transportReady ? "info" : "warning",
 					);
 					return;
@@ -737,14 +672,12 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 					if (arg === "off") {
 						if (state.roomId && bridge) await huddoraCall("room_unwatch", { room_id: state.roomId });
 						clearTimer(ctx);
-						notifyHook?.restore();
-						notifyHook = null;
 						persist({ ...state, bridgeDisabled: true });
 						if (bridge) await bridge.close();
 						bridge = null;
 						setCompatibilityBridge(null);
 						delivery = "unavailable";
-						ctx.ui.notify("Compatibility bridge off. Automatic delivery is unavailable until host MCP or the bridge is enabled.", "info");
+						ctx.ui.notify("Compatibility bridge off. Plugin tools need /huddora bridge on.", "info");
 						return;
 					}
 					if (arg === "on") {
@@ -758,8 +691,8 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 						state.bridgeDisabled
 							? "Compatibility bridge: off (user disabled)."
 							: bridge
-								? "Compatibility bridge: active."
-								: "Compatibility bridge: automatic when host MCP is unavailable.",
+								? "Compatibility bridge: active (primary tool path)."
+								: "Compatibility bridge: auto-starts for plugin tools.",
 						"info",
 					);
 					return;
@@ -767,13 +700,28 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 				case "room": {
 					const roomId = rest[0];
 					if (!roomId) {
+						if (!(await ensureTransport(ctx))) {
+							ctx.ui.notify(
+								"Compatibility bridge unavailable. Run /huddora bridge on (reauth only if OAuth expired).",
+								"warning",
+							);
+							return;
+						}
 						const rooms = await mcpRoomList();
-						ctx.ui.notify(rooms.ok ? `Rooms:\n${rooms.data.map(room => `  ${room.room_id}  ${room.name}`).join("\n")}\n\n/huddora room <id>` : "Run /mcp reauth huddora, then retry.", rooms.ok ? "info" : "warning");
+						if (!rooms.ok) {
+							ctx.ui.notify(roomToolFailureMessage(rooms.error), "warning");
+							return;
+						}
+						ctx.ui.notify(
+							rooms.data.length === 0
+								? "No rooms yet. Create or join one at huddora.coolthings.fyi, then retry /huddora room."
+								: `Rooms:\n${rooms.data.map(room => `  ${room.room_id}  ${room.name}`).join("\n")}\n\n/huddora room <id>`,
+							"info",
+						);
 						return;
 					}
 					const root = await resolveProjectRoot(ctx.cwd);
-					const mode = await ensureHostMode();
-					if (mode !== "host_manager" && !bridge && !(await ensureBridge(ctx))) {
+					if (!(await ensureTransport(ctx))) {
 						ctx.ui.notify("Huddora compatibility bridge unavailable; cannot bind room.", "error");
 						return;
 					}
@@ -805,14 +753,12 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 						persist({ ...state, pushEnabled: true });
 						await startDelivery(ctx);
 						ctx.ui.notify(
-							`Push on [${delivery}] ${notifyHook?.mode === "sole_consumer" ? "(OMP notification slot)" : ""}`.trim(),
+							`Push preference on [${delivery}] (bridge SSE + poll).`,
 							"info",
 						);
 						return;
 					}
 					if (arg === "off" || arg === "0" || arg === "false") {
-						notifyHook?.restore();
-						notifyHook = null;
 						persist({ ...state, pushEnabled: false });
 						delivery = "poll";
 						if (state.roomId && !state.paused) {
@@ -824,7 +770,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 						return;
 					}
 					ctx.ui.notify(
-						`push=${state.pushEnabled ? "on" : "off"} mode=${notifyHook?.mode ?? "none"}. Usage: /huddora push on|off`,
+						`push=${state.pushEnabled ? "on" : "off"} (bridge SSE). Usage: /huddora push on|off`,
 						"info",
 					);
 					return;
@@ -833,8 +779,6 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 					persist({ ...state, paused: true });
 					clearTimer(ctx);
 					if (state.roomId) void huddoraCall("room_unwatch", { room_id: state.roomId });
-					notifyHook?.restore();
-					notifyHook = null;
 					ctx.ui.notify("Paused.", "info");
 					return;
 				case "resume":
@@ -854,8 +798,6 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 				case "disconnect":
 					clearTimer(ctx);
 					if (state.roomId) await huddoraCall("room_unwatch", { room_id: state.roomId });
-					notifyHook?.restore();
-					notifyHook = null;
 					if (bridge) await bridge.close();
 					bridge = null;
 					setCompatibilityBridge(null);

@@ -25,9 +25,45 @@ export function shouldResetOnboardingBudget(lastStatus: string | null, status: s
 	return lastStatus !== null && status !== lastStatus;
 }
 
+/** Doctor "Next:" — bridge-only; reauth only for missing/invalid OAuth for the bridge. */
+export function doctorNextStep(input: {
+	roomId: string | null;
+	connection: string;
+	delivery: string;
+	bridgeDisabled?: boolean;
+	bridgeError?: string | null;
+}): string {
+	if (input.roomId && (input.delivery === "bridge" || input.delivery === "poll")) return "ready";
+	if (input.roomId) return "ready";
+	if (input.delivery === "bridge") return "wait for auto-bind or run /huddora room";
+	if (input.bridgeDisabled) return "run /huddora bridge on (bridge is required for plugin tools)";
+	const err = (input.bridgeError ?? "").toLowerCase();
+	if (
+		input.connection === "disconnected" ||
+		/reauth|oauth|credential|expired|401|unauthoriz|missing/.test(err)
+	) {
+		return "run /mcp reauth huddora (OAuth token missing/expired for bridge)";
+	}
+	return "run /huddora bridge on (or wait for auto-bridge)";
+}
+
+/** Map room_list failures without blanket reauth. */
+export function roomToolFailureMessage(error: { kind: string; message: string }): string {
+	if (error.kind === "no_manager" || error.kind === "no_host_api") {
+		return "Compatibility bridge not active. Run /huddora bridge on.";
+	}
+	if (error.kind === "disconnected") {
+		return error.message;
+	}
+	if (/401|unauthoriz|reauth|credential|expired|forbidden/i.test(error.message)) {
+		return `${error.message} Run /mcp reauth huddora.`;
+	}
+	return `room_list failed: ${error.message}`;
+}
+
 /**
  * Decide how autoConnect should bind a room for the current canonical root.
- * transportReady means host MCP connected OR compatibility bridge can start.
+ * transportReady means the compatibility bridge is active (bridge-only plugin).
  */
 export function decideRoomBinding(input: {
 	root: string;

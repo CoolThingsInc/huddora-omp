@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
 	decideRoomBinding,
+	doctorNextStep,
 	nextOnboardingDelayMs,
+	roomToolFailureMessage,
 	shouldResetOnboardingBudget,
 } from "./onboarding";
 
@@ -22,6 +24,43 @@ describe("onboarding observer policy", () => {
 		expect(shouldResetOnboardingBudget("disconnected", "connected")).toBe(true);
 		expect(shouldResetOnboardingBudget("no_host_api", "connected")).toBe(true);
 		expect(shouldResetOnboardingBudget("connecting", "connected")).toBe(true);
+	});
+});
+
+describe("doctorNextStep bridge-only", () => {
+	test("bridge_missing never recommends reauth", () => {
+		expect(
+			doctorNextStep({ roomId: null, connection: "bridge_missing", delivery: "unknown" }),
+		).toBe("run /huddora bridge on (or wait for auto-bridge)");
+	});
+
+	test("no_manager legacy status never recommends reauth", () => {
+		expect(
+			doctorNextStep({ roomId: null, connection: "no_manager", delivery: "unknown" }),
+		).toBe("run /huddora bridge on (or wait for auto-bridge)");
+	});
+
+	test("bridge active points at room bind", () => {
+		expect(
+			doctorNextStep({ roomId: null, connection: "bridge", delivery: "bridge" }),
+		).toBe("wait for auto-bind or run /huddora room");
+	});
+
+	test("oauth errors may reauth", () => {
+		expect(
+			doctorNextStep({
+				roomId: null,
+				connection: "bridge_missing",
+				delivery: "unknown",
+				bridgeError: "Compatibility bridge needs fresh Huddora OAuth",
+			}),
+		).toContain("reauth");
+	});
+
+	test("roomToolFailureMessage no_host_api is not reauth", () => {
+		const msg = roomToolFailureMessage({ kind: "no_host_api", message: "x" });
+		expect(msg.toLowerCase()).not.toContain("reauth");
+		expect(msg.toLowerCase()).toContain("bridge");
 	});
 });
 

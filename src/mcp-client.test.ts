@@ -3,75 +3,53 @@ import {
 	__setHostMcpForTests,
 	callHuddoraTool,
 	getHuddoraConnectionStatus,
+	getHostMcpManager,
+	resolveHostMcp,
 	setCompatibilityBridge,
 } from "./mcp-client";
 
-type FakeManager = {
-	getConnectionStatus(name: string): "connected";
-	getConnection(name: string): { name: string } | undefined;
-	waitForConnection(name: string): Promise<{ name: string }>;
-	getAllServerNames(): string[];
-};
-
-describe("host MCP lifecycle", () => {
+describe("bridge-only MCP client", () => {
 	beforeEach(() => {
 		__setHostMcpForTests(null);
 		setCompatibilityBridge(null);
 	});
 
-	test("connect recovers when the host manager appears after plugin initialization", async () => {
-		let manager: FakeManager | undefined;
-		const connection = { name: "huddora" };
-		const managerClass = {
-			instance: () => manager,
-		};
-		const callTool = async (received: unknown, toolName: string) => {
-			expect(received).toBe(connection);
-			expect(toolName).toBe("room_list");
-			return { content: [{ type: "text", text: '{"rooms":[]}' }] };
-		};
-		__setHostMcpForTests({ mode: "host_manager", manager: managerClass, callTool });
-
-		expect(await getHuddoraConnectionStatus()).toBe("no_manager");
+	test("without bridge, tools fail with bridge-not-started", async () => {
+		expect(await getHuddoraConnectionStatus()).toBe("bridge_missing");
+		expect(await getHostMcpManager()).toBeUndefined();
+		expect(await resolveHostMcp()).toEqual({
+			mode: "unavailable",
+			detail: "bridge-only plugin transport",
+		});
 		const before = await callHuddoraTool("room_list");
 		expect(before).toEqual({
 			ok: false,
-			error: { kind: "disconnected", message: "MCP manager not installed on this session yet" },
+			error: { kind: "no_host_api", message: "Compatibility bridge not started." },
 		});
-
-		manager = {
-			getConnectionStatus: () => "connected",
-			getConnection: () => connection,
-			waitForConnection: async () => connection,
-			getAllServerNames: () => ["huddora"],
-		};
-
-		expect(await getHuddoraConnectionStatus()).toBe("connected");
-		expect(await callHuddoraTool("room_list")).toEqual({ ok: true, data: { rooms: [] } });
 	});
 
-	test("uses the host API before an installed compatibility bridge", async () => {
-		const connection = { name: "huddora" };
+	test("installed bridge is the only tool path", async () => {
 		let bridgeCalls = 0;
-		const manager = {
-			instance: () => ({
-				getConnectionStatus: () => "connected" as const,
-				getConnection: () => connection,
-				waitForConnection: async () => connection,
-				getAllServerNames: () => ["huddora"],
-			}),
-		};
-		__setHostMcpForTests({
-			mode: "host_manager",
-			manager,
-			callTool: async () => ({ content: [{ type: "text", text: "{}" }] }),
-		});
-		setCompatibilityBridge(async () => {
+		setCompatibilityBridge(async (toolName, args) => {
 			bridgeCalls++;
-			return { ok: true, data: { source: "bridge" } };
+			expect(toolName).toBe("room_list");
+			expect(args).toEqual({});
+			return { ok: true, data: { rooms: [{ room_id: "r1", name: "Ops" }] } };
 		});
 
-		expect(await callHuddoraTool("room_list")).toEqual({ ok: true, data: {} });
-		expect(bridgeCalls).toBe(0);
+		expect(await getHuddoraConnectionStatus()).toBe("bridge");
+		expect(await callHuddoraTool("room_list")).toEqual({
+			ok: true,
+			data: { rooms: [{ room_id: "r1", name: "Ops" }] },
+		});
+		expect(bridgeCalls).toBe(1);
+	});
+
+	test("clearing bridge returns missing status", async () => {
+		setCompatibilityBridge(async () => ({ ok: true, data: {} }));
+		expect(await getHuddoraConnectionStatus()).toBe("bridge");
+		setCompatibilityBridge(null);
+		expect(await getHuddoraConnectionStatus()).toBe("bridge_missing");
+		expect((await callHuddoraTool("agent_register")).ok).toBe(false);
 	});
 });
