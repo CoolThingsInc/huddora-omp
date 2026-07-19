@@ -15,7 +15,14 @@ export {
 	formatRoomChatInjection,
 	maxCursor,
 } from "./format";
-export { __setHostMcpForTests, resolveHostMcp } from "./mcp-client";
+export {
+	__setHostMcpForTests,
+	callHuddoraTool,
+	getHostMcpManager,
+	getHuddoraConnectionStatus,
+	resolveHostMcp,
+} from "./mcp-client";
+export { UnsafeHuddoraBridge } from "./unsafe-bridge";
 export {
 	HUDDORA_MESSAGES_METHOD,
 	parseHuddoraMessagesNotification,

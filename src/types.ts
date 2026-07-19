@@ -9,6 +9,10 @@ export type HuddoraPluginState = {
 	paused: boolean;
 	/** Architecture H: install sole-consumer SSE notify (default true). false = poll only. */
 	pushEnabled: boolean;
+	/** Opt out of the profile-local read-only Huddora compatibility bridge. */
+	bridgeDisabled: boolean;
+	/** The compatibility bridge disclosure was acknowledged in an interactive session. */
+	bridgeDisclosureSeen: boolean;
 	/** Profile principal user_id when known (own-echo filter). */
 	selfUserId: string | null;
 	selfDisplayName: string | null;
@@ -71,7 +75,7 @@ export type RoomListItem = {
 export const CUSTOM_STATE_TYPE = "huddora-state";
 export const CUSTOM_MSG_TYPE = "huddora-chat";
 export const MCP_SERVER = "huddora";
-export const PLUGIN_VERSION = "0.1.2";
+export const PLUGIN_VERSION = "0.2.0";
 
 /** Max messages injected per poll/sync (bounded context). */
 export const INJECT_LIMIT = 40;
@@ -91,6 +95,8 @@ export function defaultState(): HuddoraPluginState {
 		cursor: 0,
 		paused: false,
 		pushEnabled: true,
+		bridgeDisabled: false,
+		bridgeDisclosureSeen: false,
 		selfUserId: null,
 		selfDisplayName: null,
 		selfAgentId: null,

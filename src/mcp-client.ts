@@ -29,50 +29,67 @@ type CallToolFn = (
 	options?: { signal?: AbortSignal },
 ) => Promise<{ content?: Array<{ type?: string; text?: string }>; isError?: boolean }>;
 
-type ManagerLike = {
-	instance(): ManagerLike | undefined;
+export type HostMcpManager = {
+	instance(): HostMcpManager | undefined;
 	getConnectionStatus(name: string): "connected" | "connecting" | "disconnected";
 	getConnection(name: string): unknown | undefined;
 	waitForConnection(name: string): Promise<unknown>;
 	getAllServerNames(): string[];
+	setOnNotification?: (handler: (server: string, method: string, params: unknown) => void) => void;
+	getOnNotification?: () => ((server: string, method: string, params: unknown) => void) | undefined;
+	onNotification?: (handler: (server: string, method: string, params: unknown) => void) => () => void;
 };
 
-let resolved: { mode: HostMcpMode; callTool?: CallToolFn; manager?: ManagerLike } | null = null;
+// ponytail: never latch unavailable permanently. The host's MCPManager.setInstance
+// runs at host session bootstrap (sdk.ts:1883) BEFORE our session_start fires, but
+// /mcp reauth can re-establish the singleton later; caching the first miss would
+// make /huddora connect dead-end with no_host_api after a successful /mcp reauth.
+let resolved: { mode: HostMcpMode; callTool?: CallToolFn; manager?: HostMcpManager } | null = null;
 
-/** Resolve host MCP surface once. Safe when package not installed (tests). */
+type CompatibilityCall = (toolName: string, args: Record<string, unknown>) => Promise<McpResult<unknown>>;
+let compatibilityCall: CompatibilityCall | null = null;
+
+/** Installs the extension-owned compatibility transport only after explicit lifecycle checks. */
+export function setCompatibilityBridge(call: CompatibilityCall | null): void {
+	compatibilityCall = call;
+}
+
+/** Test-only: inject/clear host bindings. */
+export function __setHostMcpForTests(
+	binding: { mode: HostMcpMode; callTool?: CallToolFn; manager?: HostMcpManager } | null,
+): void {
+	resolved = binding;
+}
+
+/** Resolve host MCP surface. Retried on every call until `host_manager` is seen
+ *  so a subsequent /mcp reauth / host bootstrap can recover without restart. */
 export async function resolveHostMcp(): Promise<{
 	mode: HostMcpMode;
 	detail: string;
 }> {
-	if (resolved) {
-		return {
-			mode: resolved.mode,
-			detail:
-				resolved.mode === "host_manager"
-					? "MCPManager.instance + callTool"
-					: "no host MCP client API",
-		};
+	if (resolved?.mode === "host_manager") {
+		return { mode: "host_manager", detail: "MCPManager.instance + callTool" };
 	}
 	try {
 		const mod = await import("@oh-my-pi/pi-coding-agent/mcp");
-		const MCPManager = mod.MCPManager as unknown as ManagerLike | undefined;
+		const MCPManager = mod.MCPManager as unknown as HostMcpManager | undefined;
 		const callTool = mod.callTool as CallToolFn | undefined;
 		if (MCPManager && typeof MCPManager.instance === "function" && callTool) {
 			resolved = { mode: "host_manager", callTool, manager: MCPManager };
 			return { mode: "host_manager", detail: "MCPManager.instance + callTool" };
 		}
 	} catch {
-		// package not resolvable outside omp host
+		// package not resolvable outside omp host; retry on next call — host
+		// bootstrap or /mcp reauth may make the surface available.
 	}
-	resolved = { mode: "unavailable" };
+	resolved = null;
 	return { mode: "unavailable", detail: "no host MCP client API" };
 }
 
-/** Test-only: inject/clear host bindings. */
-export function __setHostMcpForTests(
-	binding: { mode: HostMcpMode; callTool?: CallToolFn; manager?: ManagerLike } | null,
-): void {
-	resolved = binding;
+/** Return the current host manager without latching an early lifecycle miss. */
+export async function getHostMcpManager(): Promise<HostMcpManager | undefined> {
+	const host = await resolveHostMcp();
+	return host.mode === "host_manager" ? resolved?.manager?.instance() : undefined;
 }
 
 export async function callHuddoraTool(
@@ -82,19 +99,18 @@ export async function callHuddoraTool(
 ): Promise<McpResult<unknown>> {
 	const host = await resolveHostMcp();
 	if (host.mode !== "host_manager" || !resolved?.callTool || !resolved.manager) {
+		if (compatibilityCall) return compatibilityCall(toolName, args);
 		return {
 			ok: false,
 			error: {
 				kind: "no_host_api",
-				message:
-					"No extension-stable MCP call API. Use hybrid: model mcp__huddora_* tools, or feature-request pi.mcp.call. Host MCPManager.instance unavailable.",
+				message: "Host MCP client unavailable.",
 			},
 		};
 	}
 
-	const MCPManager = resolved.manager;
 	const callTool = resolved.callTool;
-	const manager = MCPManager.instance();
+	const manager = resolved.manager.instance();
 	if (!manager) {
 		return {
 			ok: false,

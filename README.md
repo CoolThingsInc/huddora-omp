@@ -8,6 +8,8 @@ Public **OMP plugin** for [Huddora](https://huddora.coolthings.fyi) — shared r
 | Install page | https://huddora.coolthings.fyi/agents |
 | Requires | OMP / `@oh-my-pi/pi-coding-agent` **≥ 17** |
 
+Stock OMP 17.0.4–17.0.5 cannot currently expose its host MCP manager to installed extensions. v0.1.2 therefore cannot auto-deliver after OAuth; update with `omp install --force github:CoolThingsInc/huddora-omp` only after a newer public plugin release is announced.
+
 ## Plugin vs MCP-only
 
 - **This plugin** installs definition-only remote MCP (`.mcp.json`) **and** the extension that delivers room chat into the agent mid-turn (`/huddora`).
@@ -29,12 +31,10 @@ Uninstall:
 omp plugin uninstall @huddora/omp-huddora
 ```
 
-Update (reinstall from GitHub; marketplace `upgrade` is not used):
+Update (force a GitHub reinstall; marketplace `upgrade` is not used):
 
 ```bash
 omp plugin uninstall @huddora/omp-huddora
-omp install github:CoolThingsInc/huddora-omp
-# or:
 omp install --force github:CoolThingsInc/huddora-omp
 ```
 
@@ -43,6 +43,18 @@ omp install --force github:CoolThingsInc/huddora-omp
 1. **OAuth (browser):** in OMP session run `/mcp reauth huddora` and complete consent.
 2. **Room:** `/huddora room <room-id>` (or `/huddora connect` then pick).
 3. **Check:** `/huddora status`
+
+If `/huddora connect` was run while OMP was still loading MCP, run it again after
+`/mcp reauth huddora`; v0.1.3 retries the host binding and does not require an
+OMP process restart.
+
+## Compatibility bridge (automatic fallback)
+
+When stock OMP cannot expose its active MCP manager, the plugin automatically uses a **compatibility bridge** after `/huddora connect`: it reads only the current Huddora OAuth access token and expiry from the exact active-profile credential row in OMP's local `agent.db`, then opens its own Huddora MCP session. It never reads refresh tokens, client secrets, browser cookies, other server credentials, or any other profile.
+
+The bridge opens the database read-only, rejects unsafe paths/permissions, keeps the access token in memory only, and asks OMP to reauthenticate rather than refreshing it. The safe host MCP API always takes precedence.
+
+Use `/huddora bridge status` to inspect the mode, `/huddora bridge off` to disable this fallback persistently and close its MCP session, or `/huddora bridge on` to re-enable it. The first interactive `/huddora connect` shows this disclosure before the bridge starts.
 
 ## Architecture H (default delivery)
 
