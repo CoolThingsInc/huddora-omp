@@ -1,9 +1,8 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spyOn } from "bun:test";
 import { UnsafeHuddoraBridge } from "./unsafe-bridge";
 
 const roots: string[] = [];
@@ -106,6 +105,27 @@ describe("compatibility bridge credential boundary", () => {
 		fetchSpy.mockRestore();
 	});
 
+
+	test("closes its session with the token only in an Authorization header", async () => {
+		const root = await fixture();
+		await addRow(root, "default", Date.now() + 60_000);
+		const fetchSpy = spyOn(globalThis, "fetch");
+		fetchSpy.mockResolvedValueOnce(
+			new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }), {
+				status: 200,
+				headers: { "Mcp-Session-Id": "fixture-session" },
+			}),
+		);
+		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 202 }));
+		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 200 }));
+		const bridge = new UnsafeHuddoraBridge("default", { homeDir: root });
+		expect((await bridge.start(() => {})).ok).toBe(true);
+		await bridge.close();
+		const close = fetchSpy.mock.calls.at(-1);
+		expect(close?.[1]).toMatchObject({ method: "DELETE", headers: { "Mcp-Session-Id": "fixture-session" } });
+		expect(String(close?.[1]?.body ?? "")).not.toContain("fixture-access");
+		fetchSpy.mockRestore();
+	});
 	test("rejects a symlink and writable database path", async () => {
 		const symlinkRoot = await fixture();
 		const agent = path.join(symlinkRoot, ".omp", "agent");
