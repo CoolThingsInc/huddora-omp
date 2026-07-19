@@ -59,7 +59,7 @@ Stock OMP has a **single** MCP notification callback. This plugin uses it by def
 - Default: push **on**
 - `/huddora push off` → poll / long-poll only
 - If the host exposes `getOnNotification`, handlers are chained and restored on shutdown
-- Without a getter, the plugin **fail-closes** to poll (does not clobber unknown handlers)
+- Default **sole-consumer** push may replace a previous notification handler when the host has no getter; use `/huddora push off` for poll-only. Fail-closed (no clobber) only if sole-consumer is disabled.
 
 ## Commands
 
