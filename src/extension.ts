@@ -38,6 +38,11 @@ import {
 } from "./project-config";
 import { bootstrapRoom, durablePayload, longPollWaitMs, pullAndFormat } from "./sync";
 import {
+	decideRoomBinding,
+	nextOnboardingDelayMs,
+	shouldResetOnboardingBudget,
+} from "./onboarding";
+import {
 	CUSTOM_MSG_TYPE,
 	CUSTOM_STATE_TYPE,
 	defaultState,
@@ -152,14 +157,29 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 			} else if (!(await ensureBridge(ctx))) {
 				return false;
 			}
-			if (loaded.config.default_room_id) return bindRoom(ctx, root, loaded.config.default_room_id, "config");
-			// v0.2 migration: validate the prior session room, use it only for this root/session, never write config.
-			if (state.roomId && state.projectRoot === null) return bindRoom(ctx, root, state.roomId, "legacy", true);
-			const rooms = await mcpRoomList();
-			if (!rooms.ok) return false;
-			if (rooms.data.length === 1) return bindRoom(ctx, root, rooms.data[0]!.room_id, "single");
-			if (rooms.data.length === 0) ctx.ui.notify("Huddora: no rooms yet. Create or join one at huddora.coolthings.fyi.", "info");
-			else ctx.ui.notify("Huddora: choose a room once with /huddora room <id>.", "info");
+			let rooms: Array<{ room_id: string }> = [];
+			const needsRooms = !loaded.config.default_room_id && !(state.roomId && state.projectRoot === null);
+			if (needsRooms) {
+				const listed = await mcpRoomList();
+				if (!listed.ok) return false;
+				rooms = listed.data;
+			}
+			const decision = decideRoomBinding({
+				root,
+				configRoomId: loaded.config.default_room_id,
+				stateRoomId: state.roomId,
+				stateProjectRoot: state.projectRoot,
+				rooms,
+				transportReady: true,
+			});
+			if (decision.action === "bind") {
+				return bindRoom(ctx, root, decision.roomId, decision.source, decision.preserveCursor);
+			}
+			if (decision.action === "prompt_empty") {
+				ctx.ui.notify("Huddora: no rooms yet. Create or join one at huddora.coolthings.fyi.", "info");
+			} else if (decision.action === "prompt_choose") {
+				ctx.ui.notify("Huddora: choose a room once with /huddora room <id>.", "info");
+			}
 			return false;
 		} finally {
 			onboardingInFlight = false;
@@ -179,10 +199,8 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 			if (shutdown || state.paused) return;
 			const status = await getHuddoraConnectionStatus();
 			// Any real status change re-arms the aggressive budget (covers late /mcp reauth).
-			if (status !== lastOnboardStatus) {
-				if (lastOnboardStatus !== null) onboardingAttempts = 0;
-				lastOnboardStatus = status;
-			}
+			if (shouldResetOnboardingBudget(lastOnboardStatus, status)) onboardingAttempts = 0;
+			if (status !== lastOnboardStatus) lastOnboardStatus = status;
 			const connected = await autoConnect(ctx);
 			if (connected || shutdown || state.paused) {
 				if (onboardingTimer) {
@@ -194,8 +212,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 			onboardingAttempts += 1;
 			// Aggressive retries first, then slow re-arm forever so a later reauth/credential
 			// write is observed without requiring /huddora connect or a session restart.
-			const delay =
-				onboardingAttempts <= 6 ? Math.min(30_000, 1_000 * 2 ** onboardingAttempts) : 15_000;
+			const delay = nextOnboardingDelayMs(onboardingAttempts);
 			onboardingTimer = ctx.setTimeout(() => void attempt(), delay);
 		};
 		void attempt();
