@@ -12,7 +12,7 @@ This is current v0.2.0 compatibility behavior for stock OMP 17.0.5 and is remove
 
 ## Project configuration
 
-The plugin reads exactly `<OMP ctx.cwd>/.huddora/config.json`; it never discovers configuration through parent, git-root, or home traversal. The path and `.huddora` directory must be real files/directories within that resolved project root, never symlinks. The schema has only `version` and `default_room_id`; unknown fields and malformed UUIDs are rejected. Configuration is untrusted metadata, never runtime instructions, and may not contain tokens, OAuth data, URLs, invite codes, ownership/user IDs, or agent identity data.
+The plugin reads exactly `<OMP ctx.cwd>/.huddora/config.json`; it never discovers configuration through parent, git-root, or home traversal. The path and `.huddora` directory must be real files/directories within that resolved project root, never symlinks. The schema has only optional pinned `$schema`, `version`, and `default_room_id`; unknown fields and malformed UUIDs are rejected. Configuration is untrusted metadata, never runtime instructions, and may not contain tokens, OAuth data, URLs, invite codes, ownership/user IDs, or agent identity data.
 
 ## Presence
 

@@ -77,6 +77,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 	let onboardingTimer: TimerHandle | null = null;
 	let onboardingInFlight = false;
 	let onboardingAttempts = 0;
+	let lastOnboardStatus: string | null = null;
 
 	function persist(next: HuddoraPluginState) {
 		state = next;
@@ -145,8 +146,12 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 				return true;
 			}
 			const mode = await ensureHostMode();
-			if (mode !== "host_manager" && !(await ensureBridge(ctx))) return false;
-			await ensureAgentRegistered();
+			if (mode === "host_manager") {
+				const status = await getHuddoraConnectionStatus();
+				if (status !== "connected") return false;
+			} else if (!(await ensureBridge(ctx))) {
+				return false;
+			}
 			if (loaded.config.default_room_id) return bindRoom(ctx, root, loaded.config.default_room_id, "config");
 			// v0.2 migration: validate the prior session room, use it only for this root/session, never write config.
 			if (state.roomId && state.projectRoot === null) return bindRoom(ctx, root, state.roomId, "legacy", true);
@@ -162,11 +167,30 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 	}
 
 	function scheduleOnboarding(ctx: ExtensionContext, reset = false) {
-		if (reset) onboardingAttempts = 0;
-		if (onboardingTimer) ctx.clearTimer(onboardingTimer);
+		if (reset) {
+			onboardingAttempts = 0;
+			lastOnboardStatus = null;
+		}
+		if (onboardingTimer) {
+			ctx.clearTimer(onboardingTimer);
+			onboardingTimer = null;
+		}
 		const attempt = async () => {
+			if (shutdown || state.paused) return;
+			const status = await getHuddoraConnectionStatus();
+			if (status !== lastOnboardStatus && (status === "connected" || status === "connecting" || lastOnboardStatus === null)) {
+				// Real status transitions restart the bounded observer budget.
+				if (lastOnboardStatus !== null && status !== lastOnboardStatus) onboardingAttempts = 0;
+				lastOnboardStatus = status;
+			}
 			const connected = await autoConnect(ctx);
-			if (connected || shutdown || onboardingAttempts >= 6) return;
+			if (connected || shutdown || onboardingAttempts >= 6) {
+				if (onboardingTimer) {
+					ctx.clearTimer(onboardingTimer);
+					onboardingTimer = null;
+				}
+				return;
+			}
 			onboardingAttempts += 1;
 			onboardingTimer = ctx.setTimeout(() => void attempt(), Math.min(30_000, 1_000 * 2 ** onboardingAttempts));
 		};
@@ -409,8 +433,8 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		});
 		return true;
 	}
-
 	async function ensureAgentRegistered(): Promise<void> {
+		if (state.selfAgentId) return;
 		await callRegister();
 	}
 	async function heartbeatTick() {
@@ -650,10 +674,11 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 			switch (sub) {
 				case "connect": {
 					scheduleOnboarding(ctx, true);
-					const connected = await autoConnect(ctx);
-					if (connected) ctx.ui.notify("Huddora connected.", "info");
 					return;
 				}
+				case "status":
+					ctx.ui.notify(await statusText(), "info");
+					return;
 				case "help":
 					ctx.ui.notify(COLLABORATION_HELP, "info");
 					return;
@@ -682,6 +707,8 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 					if (arg === "off") {
 						if (state.roomId && bridge) await huddoraCall("room_unwatch", { room_id: state.roomId });
 						clearTimer(ctx);
+						notifyHook?.restore();
+						notifyHook = null;
 						persist({ ...state, bridgeDisabled: true });
 						if (bridge) await bridge.close();
 						bridge = null;
@@ -722,6 +749,16 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 					}
 					if (!(await bindRoom(ctx, root, roomId, "session"))) {
 						ctx.ui.notify("Huddora: room is unavailable.", "error");
+						return;
+					}
+					const remember =
+						!ctx.hasUI ||
+						(await ctx.ui.confirm(
+							"Remember Huddora room?",
+							"Save this room id as the project default in .huddora/config.json for this OMP project root?",
+						));
+					if (!remember) {
+						ctx.ui.notify("Huddora room bound for this session only.", "info");
 						return;
 					}
 					try {
@@ -766,6 +803,8 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 					persist({ ...state, paused: true });
 					clearTimer(ctx);
 					if (state.roomId) void huddoraCall("room_unwatch", { room_id: state.roomId });
+					notifyHook?.restore();
+					notifyHook = null;
 					ctx.ui.notify("Paused.", "info");
 					return;
 				case "resume":
@@ -785,9 +824,12 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 				case "disconnect":
 					clearTimer(ctx);
 					if (state.roomId) await huddoraCall("room_unwatch", { room_id: state.roomId });
+					notifyHook?.restore();
+					notifyHook = null;
 					if (bridge) await bridge.close();
 					bridge = null;
 					setCompatibilityBridge(null);
+					delivery = "unavailable";
 					persist(defaultState());
 					injectedCursors.clear();
 					rateGuard = defaultRateGuard();

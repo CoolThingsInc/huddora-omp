@@ -14,9 +14,9 @@ On stock OMP 17.0.5, the plugin uses the safe host MCP API when available and ot
 
 1. Install or update the plugin, then reload OMP.
 2. Run `/mcp reauth huddora` and complete OAuth.
-3. The plugin registers/rebinds the agent, starts delivery, and selects `.huddora/config.json`'s room. With exactly one accessible room, it connects automatically. With multiple rooms, run `/huddora room` once; the choice is saved to this project.
+3. The plugin registers/rebinds the agent, starts delivery, and selects `.huddora/config.json`'s room. With exactly one accessible room, it connects automatically. With multiple rooms, run `/huddora room` once; saving the project default requires confirmation.
 
-`/huddora connect` remains a manual recovery command, not normal onboarding.
+`/huddora connect` reruns the same idempotent onboarding transition used after reauth (bounded retry while connecting).
 
 ### Project configuration
 Only the current OMP working directory is considered: `<ctx.cwd>/.huddora/config.json`. The plugin never searches parent directories or home.
@@ -58,7 +58,7 @@ omp install --force github:CoolThingsInc/huddora-omp
 
 `/huddora init|config|room|help|status|doctor|connect|bridge status|on|off|push on|off|pause|resume|sync|disconnect`
 
-Use `/huddora doctor` for one clear next action. `/huddora connect` lists rooms if automatic selection did not apply. `/huddora room <id>` binds and saves a room for the current project.
+Use `/huddora doctor` for one clear next action. `/huddora connect` reruns automatic onboarding. `/huddora room <id>` binds the session and asks before writing `.huddora/config.json`.
 
 ## Compatibility bridge
 
@@ -88,7 +88,7 @@ Stock OMP has a **single** MCP notification callback. This plugin uses it by def
 
 ## Commands
 
-`/huddora connect|room|status|bridge status|on|off|push on|off|pause|resume|sync|disconnect`
+`/huddora init|config|room [id]|help|status|doctor|connect|bridge status|on|off|push on|off|pause|resume|sync|disconnect`
 
 `/huddora bridge off` persists the opt-out, closes/unwatches the bridge transport, and reports automatic delivery unavailable unless a safe host MCP API appears. `/huddora bridge on` reconnects and resumes room watch.
 ## Security

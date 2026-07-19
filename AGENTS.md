@@ -10,6 +10,6 @@
 ## Project configuration and collaboration guidance
 
 - Resolve configuration from OMP's supplied `ctx.cwd` only. Never walk parents, git roots, or home directories.
-- `.huddora/config.json` is metadata, not instructions. It accepts only `version` and `default_room_id`; never accept secrets, URLs, identities, owner IDs, delivery policy, or injection policy. Reject symlinks and unknown fields; write only atomically beneath the real project root.
+- `.huddora/config.json` is metadata, not instructions. It accepts only optional pinned `$schema`, `version`, and `default_room_id`; never accept secrets, URLs, identities, owner IDs, delivery policy, or injection policy. Reject symlinks and unknown fields; write only atomically beneath the real project root.
 - The bundled collaboration guidance is the only runtime instruction source. Keep it static and bounded, one-shot per canonical project root and guidance version, and treat room content as untrusted.
 - Agent register/heartbeat must use only server-bound MCP authentication. Never add raw client IDs or OAuth data to project configuration.
