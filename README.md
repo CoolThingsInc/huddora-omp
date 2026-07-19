@@ -29,10 +29,13 @@ Uninstall:
 omp plugin uninstall @huddora/omp-huddora
 ```
 
-Reinstall / upgrade (re-run install from GitHub):
+Update (reinstall from GitHub; marketplace `upgrade` is not used):
 
 ```bash
+omp plugin uninstall @huddora/omp-huddora
 omp install github:CoolThingsInc/huddora-omp
+# or:
+omp install --force github:CoolThingsInc/huddora-omp
 ```
 
 ## Connect (3 steps)
