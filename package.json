@@ -1,0 +1,56 @@
+{
+	"name": "@huddora/omp-huddora",
+	"version": "0.1.0",
+	"type": "module",
+	"description": "OMP plugin for Huddora: room chat via MCP (definition-only) + live inject (/huddora)",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		},
+		"./extension": {
+			"types": "./dist/extension.d.ts",
+			"default": "./dist/extension.js"
+		}
+	},
+	"files": [
+		"dist",
+		"src",
+		"mcp.json",
+		".mcp.json",
+		"README.md"
+	],
+	"omp": {
+		"extensions": [
+			"./src/extension.ts"
+		]
+	},
+	"scripts": {
+		"build": "tsc -b",
+		"typecheck": "tsc -b --pretty false",
+		"test": "bun test src"
+	},
+	"peerDependencies": {
+		"@oh-my-pi/pi-coding-agent": ">=17.0.0"
+	},
+	"devDependencies": {
+		"@oh-my-pi/pi-coding-agent": "17.0.5",
+		"@types/bun": "latest",
+		"typescript": "^5.9.3"
+	},
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/CoolThingsInc/huddora-omp.git"
+	},
+	"homepage": "https://huddora.coolthings.fyi/agents",
+	"bugs": {
+		"url": "https://github.com/CoolThingsInc/huddora-omp/issues"
+	},
+	"keywords": [
+		"omp",
+		"huddora",
+		"mcp",
+		"plugin"
+	]
+}
