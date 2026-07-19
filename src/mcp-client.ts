@@ -55,7 +55,7 @@ export async function resolveHostMcp(): Promise<{
 	}
 	try {
 		const mod = await import("@oh-my-pi/pi-coding-agent/mcp");
-		const MCPManager = mod.MCPManager as ManagerLike | undefined;
+		const MCPManager = mod.MCPManager as unknown as ManagerLike | undefined;
 		const callTool = mod.callTool as CallToolFn | undefined;
 		if (MCPManager && typeof MCPManager.instance === "function" && callTool) {
 			resolved = { mode: "host_manager", callTool, manager: MCPManager };
