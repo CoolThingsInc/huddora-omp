@@ -161,7 +161,7 @@ export class UnsafeHuddoraBridge {
 			if (!response.ok) return { ok: false, message: `Compatibility bridge HTTP ${response.status}` };
 			const body = (await response.json()) as JsonRpcResponse;
 			if (body.error) return { ok: false, message: "Compatibility bridge MCP tool error" };
-			return { ok: true, data: body.result ?? null };
+			return { ok: true, data: unwrapToolResult(body.result) };
 		} catch {
 			return { ok: false, message: "Compatibility bridge transport error" };
 		}
@@ -330,6 +330,19 @@ export class UnsafeHuddoraBridge {
 		} catch {
 			return { ok: false, status: "missing_credential" };
 		}
+	}
+}
+
+function unwrapToolResult(value: unknown): unknown {
+	if (!value || typeof value !== "object" || !("content" in value) || !Array.isArray(value.content)) return value;
+	const first = value.content.find(
+		item => item && typeof item === "object" && "type" in item && item.type === "text" && "text" in item && typeof item.text === "string",
+	);
+	if (!first || typeof first.text !== "string") return value;
+	try {
+		return JSON.parse(first.text) as unknown;
+	} catch {
+		return value;
 	}
 }
 

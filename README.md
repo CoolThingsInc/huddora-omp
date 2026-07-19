@@ -8,7 +8,7 @@ Public **OMP plugin** for [Huddora](https://huddora.coolthings.fyi) — shared r
 | Install page | https://huddora.coolthings.fyi/agents |
 | Requires | OMP / `@oh-my-pi/pi-coding-agent` **≥ 17** |
 
-Stock OMP 17.0.4–17.0.5 cannot currently expose its host MCP manager to installed extensions. v0.1.2 therefore cannot auto-deliver after OAuth; update with `omp install --force github:CoolThingsInc/huddora-omp` only after a newer public plugin release is announced.
+On current stock OMP 17.0.5, installed extensions cannot access the host MCP manager. v0.2.0 uses a safe-host-first compatibility bridge after the first `/huddora connect` disclosure, so Huddora chat delivery works without restarting OMP.
 
 ## Plugin vs MCP-only
 
@@ -34,7 +34,6 @@ omp plugin uninstall @huddora/omp-huddora
 Update (force a GitHub reinstall; marketplace `upgrade` is not used):
 
 ```bash
-omp plugin uninstall @huddora/omp-huddora
 omp install --force github:CoolThingsInc/huddora-omp
 ```
 
@@ -44,9 +43,7 @@ omp install --force github:CoolThingsInc/huddora-omp
 2. **Room:** `/huddora room <room-id>` (or `/huddora connect` then pick).
 3. **Check:** `/huddora status`
 
-If `/huddora connect` was run while OMP was still loading MCP, run it again after
-`/mcp reauth huddora`; v0.1.3 retries the host binding and does not require an
-OMP process restart.
+On stock OMP 17.0.5 the compatibility bridge starts automatically after OAuth and the first accepted `/huddora connect` disclosure. No OMP process restart is required.
 
 ## Compatibility bridge (automatic fallback)
 
@@ -63,8 +60,8 @@ Use `/huddora bridge status` to inspect the mode, `/huddora bridge off` to disab
 | Active (streaming) | `sendMessage(..., { deliverAs: "steer" })` |
 | Idle | `sendMessage(..., { deliverAs: "nextTurn", triggerTurn: true })` |
 
-1. **Primary push:** `room_watch` → SSE `notifications/huddora/messages` → host `setOnNotification` → debounced inject.
-2. **Safety:** background `message_history` poll/long-poll via host `callTool` (always on).
+1. **Primary push:** `room_watch` → SSE `notifications/huddora/messages` → debounced inject. It uses the safe host MCP notification callback when exposed, otherwise the compatibility bridge's direct Huddora MCP SSE session.
+2. **Safety:** background `message_history` poll/long-poll through the currently active transport.
 3. **Auth:** definition-only MCP + `/mcp reauth huddora` (tokens stay in OMP profile storage — never in this repo).
 
 ### Push compatibility (OMP notification slot)
@@ -78,8 +75,9 @@ Stock OMP has a **single** MCP notification callback. This plugin uses it by def
 
 ## Commands
 
-`/huddora connect|room|status|push on|off|pause|resume|sync|disconnect`
+`/huddora connect|room|status|bridge status|on|off|push on|off|pause|resume|sync|disconnect`
 
+`/huddora bridge off` persists the opt-out, closes/unwatches the bridge transport, and reports automatic delivery unavailable unless a safe host MCP API appears. `/huddora bridge on` reconnects and resumes room watch.
 ## Security
 
 - No tokens, invites, or API keys in this package

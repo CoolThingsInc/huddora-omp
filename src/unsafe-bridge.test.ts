@@ -105,6 +105,21 @@ describe("compatibility bridge credential boundary", () => {
 		fetchSpy.mockRestore();
 	});
 
+	test("unwraps JSON MCP text content for bridge callers", async () => {
+		const root = await fixture();
+		await addRow(root, "default", Date.now() + 60_000);
+		const fetchSpy = spyOn(globalThis, "fetch");
+		fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }), { status: 200, headers: { "Mcp-Session-Id": "fixture-session" } }));
+		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 202 }));
+		fetchSpy.mockResolvedValueOnce(
+			new Response(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: '{"rooms":[]}' }] } }), { status: 200 }),
+		);
+		const bridge = new UnsafeHuddoraBridge("default", { homeDir: root });
+		expect((await bridge.start(() => {})).ok).toBe(true);
+		expect(await bridge.callTool("room_list", {})).toEqual({ ok: true, data: { rooms: [] } });
+		fetchSpy.mockRestore();
+	});
+
 	test("rereads once for each independent 401 request", async () => {
 		const root = await fixture();
 		await addRow(root, "default", Date.now() + 60_000);
