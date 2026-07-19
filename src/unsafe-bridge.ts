@@ -23,7 +23,12 @@ export type UnsafeBridgeStatus =
 
 export type UnsafeBridgeResult<T> = { ok: true; data: T } | { ok: false; message: string };
 
-type BridgeOptions = { homeDir?: string };
+type BridgeOptions = {
+	homeDir?: string;
+	now?: () => number;
+	schedule?: (handler: () => void, delayMs: number) => unknown;
+	cancelSchedule?: (handle: unknown) => void;
+};
 
 export class UnsafeHuddoraBridge {
 	#accessToken: string | null = null;
@@ -32,27 +37,37 @@ export class UnsafeHuddoraBridge {
 	#sseAbort: AbortController | null = null;
 	#nextId = 1;
 	#onNotification: NotificationHandler | null = null;
-	#sseRetry: ReturnType<typeof setTimeout> | null = null;
+	#sseRetry: unknown | null = null;
 	#sseRetryDelayMs = 1_000;
 	#closed = false;
+	#reauthRequired = false;
+	#sseAuthRecovered = false;
+	#sseRecovery: Promise<boolean> | null = null;
 
 	constructor(
 		private readonly profile = process.env.OMP_PROFILE ?? process.env.PI_PROFILE ?? "default",
 		options: BridgeOptions = {},
 	) {
 		this.#homeDir = options.homeDir ?? os.homedir();
+		this.#now = options.now ?? Date.now;
+		this.#schedule = options.schedule ?? ((handler, delayMs) => setTimeout(handler, delayMs));
+		this.#cancelSchedule = options.cancelSchedule ?? (handle => clearTimeout(handle as ReturnType<typeof setTimeout>));
 	}
 	#homeDir: string;
+	#now: () => number;
+	#schedule: (handler: () => void, delayMs: number) => unknown;
+	#cancelSchedule: (handle: unknown) => void;
 
 	async status(): Promise<UnsafeBridgeStatus> {
+		if (this.#reauthRequired) return "reauth_required";
 		const token = await this.#readToken();
 		if (!token.ok) return token.status;
-		return token.value.expiresAt > Date.now() ? "ready" : "expired";
+		return token.value.expiresAt > this.#now() ? "ready" : "expired";
 	}
 
 	async start(onNotification: NotificationHandler): Promise<UnsafeBridgeResult<void>> {
 		this.#closed = false;
-		this.#onNotification = onNotification;
+		this.#sseAuthRecovered = false;
 		const token = await this.#loadToken();
 		if (!token.ok) return token;
 		const initialized = await this.#request("initialize", {
@@ -63,7 +78,7 @@ export class UnsafeHuddoraBridge {
 		if (!initialized.ok) return initialized;
 		await this.#notify("notifications/initialized", {});
 		this.#sseRetryDelayMs = 1_000;
-		void this.#startSse();
+		this.#launchSse();
 		return { ok: true, data: undefined };
 	}
 
@@ -81,7 +96,7 @@ export class UnsafeHuddoraBridge {
 		this.#closed = true;
 		this.#sseAbort?.abort();
 		this.#sseAbort = null;
-		if (this.#sseRetry) clearTimeout(this.#sseRetry);
+		if (this.#sseRetry !== null) this.#cancelSchedule(this.#sseRetry);
 		this.#sseRetry = null;
 		const token = this.#accessToken;
 		const sessionId = this.#sessionId;
@@ -103,9 +118,10 @@ export class UnsafeHuddoraBridge {
 	async #loadToken(): Promise<UnsafeBridgeResult<void>> {
 		const token = await this.#readToken();
 		if (!token.ok) return { ok: false, message: unsafeStatusMessage(token.status) };
-		if (token.value.expiresAt <= Date.now()) return { ok: false, message: unsafeStatusMessage("expired") };
+		if (token.value.expiresAt <= this.#now()) return { ok: false, message: unsafeStatusMessage("expired") };
 		this.#accessToken = token.value.access;
 		this.#expiresAt = token.value.expiresAt;
+		this.#reauthRequired = false;
 		return { ok: true, data: undefined };
 	}
 
@@ -113,12 +129,14 @@ export class UnsafeHuddoraBridge {
 		method: string,
 		params: Record<string, unknown>,
 		reloaded = false,
+		skipSseRecoveryWait = false,
 	): Promise<UnsafeBridgeResult<unknown>> {
-		if (!this.#accessToken || this.#expiresAt <= Date.now()) {
+		if (this.#sseRecovery && !skipSseRecoveryWait) await this.#sseRecovery;
+		if (!this.#accessToken || this.#expiresAt <= this.#now()) {
 			if (reloaded) return { ok: false, message: unsafeStatusMessage("expired") };
 			this.#accessToken = null;
 			const loaded = await this.#loadToken();
-			return loaded.ok ? this.#request(method, params, true) : loaded;
+			return loaded.ok ? this.#request(method, params, true, skipSseRecoveryWait) : loaded;
 		}
 		const id = this.#nextId++;
 		try {
@@ -136,6 +154,7 @@ export class UnsafeHuddoraBridge {
 			}
 			if (response.status === 401 || response.status === 403) {
 				this.#accessToken = null;
+				this.#reauthRequired = true;
 				return { ok: false, message: unsafeStatusMessage("reauth_required") };
 			}
 			if (!response.ok) return { ok: false, message: `Compatibility bridge HTTP ${response.status}` };
@@ -161,10 +180,11 @@ export class UnsafeHuddoraBridge {
 	}
 
 	async #startSse(): Promise<void> {
-		if (!this.#accessToken || !this.#sessionId || this.#sseAbort || this.#closed) return;
+		if (!this.#accessToken || !this.#sessionId || this.#sseAbort || this.#closed || this.#reauthRequired) return;
 		const abort = new AbortController();
 		this.#sseAbort = abort;
 		let retry = false;
+		let restartAfterAuth = false;
 		try {
 			const response = await fetch(HUDDORA_URL, {
 				method: "GET",
@@ -172,7 +192,12 @@ export class UnsafeHuddoraBridge {
 				signal: abort.signal,
 			});
 			if (!response.ok || !response.body) {
-				retry = response.status !== 401 && response.status !== 403;
+				if (response.status === 401 || response.status === 403) {
+					this.#accessToken = null;
+					this.#reauthRequired = true;
+					return;
+				}
+				retry = true;
 				return;
 			}
 			this.#sseRetryDelayMs = 1_000;
@@ -206,21 +231,63 @@ export class UnsafeHuddoraBridge {
 			retry = !abort.signal.aborted;
 		} finally {
 			if (this.#sseAbort === abort) this.#sseAbort = null;
-			if (retry && !this.#closed && this.#accessToken && this.#sessionId) this.#scheduleSseRetry();
+			if (restartAfterAuth && !this.#closed && !this.#reauthRequired) this.#launchSse();
+			else if (retry && !this.#closed && this.#accessToken && this.#sessionId) this.#scheduleSseRetry();
 		}
 	}
 
-	#scheduleSseRetry(): void {
-		if (this.#sseRetry || this.#closed) return;
-		const delay = this.#sseRetryDelayMs;
-		this.#sseRetryDelayMs = Math.min(delay * 2, 30_000);
-		this.#sseRetry = setTimeout(() => {
-			this.#sseRetry = null;
-			void this.#startSse();
-		}, delay);
-		this.#sseRetry.unref?.();
+	#launchSse(): void {
+		if (this.#sseRetry !== null || this.#closed || this.#reauthRequired) return;
+		const handle = this.#schedule(async () => {
+			if (this.#sseRetry === handle) this.#sseRetry = null;
+			await this.#startSse();
+		}, 100);
+		this.#sseRetry = handle;
 	}
 
+	#scheduleSseRetry(): void {
+		if (this.#sseRetry !== null || this.#closed || this.#reauthRequired) return;
+		const delay = this.#sseRetryDelayMs;
+		this.#sseRetryDelayMs = Math.min(delay * 2, 30_000);
+		this.#sseRetry = this.#schedule(async () => {
+			this.#sseRetry = null;
+			await this.#startSse();
+		}, delay);
+	}
+
+	async #recoverSseAuth(): Promise<boolean> {
+		if (this.#sseRecovery) return this.#sseRecovery;
+		if (this.#sseAuthRecovered) {
+			this.#accessToken = null;
+			this.#reauthRequired = true;
+			return false;
+		}
+		this.#sseAuthRecovered = true;
+		this.#sseRecovery = (async () => {
+			this.#accessToken = null;
+			const loaded = await this.#loadToken();
+			if (!loaded.ok || this.#closed) {
+				this.#reauthRequired = true;
+				return false;
+			}
+			const initialized = await this.#request(
+				"initialize",
+				{ protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "huddora-omp-compatibility-bridge", version: "0.2.0" } },
+				true,
+				true,
+			);
+			if (!initialized.ok) {
+				this.#reauthRequired = true;
+				return false;
+			}
+			await this.#notify("notifications/initialized", {});
+			this.#sseRetryDelayMs = 1_000;
+			return true;
+		})().finally(() => {
+			this.#sseRecovery = null;
+		});
+		return this.#sseRecovery;
+	}
 	#headers(base: Record<string, string>): Record<string, string> {
 		const headers: Record<string, string> = { ...base, Authorization: `Bearer ${this.#accessToken ?? ""}` };
 		if (this.#sessionId) headers["Mcp-Session-Id"] = this.#sessionId;

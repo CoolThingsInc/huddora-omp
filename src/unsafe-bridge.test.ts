@@ -93,7 +93,7 @@ describe("compatibility bridge credential boundary", () => {
 		);
 		const bridge = new UnsafeHuddoraBridge("default", { homeDir: root });
 		const started = await bridge.start(() => {});
-		expect(started.ok).toBe(true);
+		expect(started).toEqual({ ok: true, data: undefined });
 		const result = await bridge.callTool("room_list", {});
 		expect(result.ok).toBe(true);
 		for (const call of fetchSpy.mock.calls) {
@@ -139,26 +139,66 @@ describe("compatibility bridge credential boundary", () => {
 		fetchSpy.mockRestore();
 	});
 
-
-	test("backs off after an SSE failure and cancels retries on close", async () => {
+	test("marks SSE 401 reauth-required without token body leakage", async () => {
 		const root = await fixture();
 		await addRow(root, "default", Date.now() + 60_000);
+		const scheduled: Array<() => Promise<void>> = [];
 		const fetchSpy = spyOn(globalThis, "fetch");
-		const timerSpy = spyOn(globalThis, "setTimeout");
+		fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }), { status: 200, headers: { "Mcp-Session-Id": "fixture-session" } }));
+		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 202 }));
+		const bridge = new UnsafeHuddoraBridge("default", {
+			homeDir: root,
+			schedule: run => {
+				scheduled.push(run as () => Promise<void>);
+				return run;
+			},
+			cancelSchedule: () => {},
+		});
+		expect((await bridge.start(() => {})).ok).toBe(true);
+		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 401 }));
+		await scheduled[0]!();
+		expect(await bridge.status()).toBe("reauth_required");
+		for (const [url, options] of fetchSpy.mock.calls) {
+			expect(String(url)).not.toContain("fixture-access");
+			expect(String(options?.body ?? "")).not.toContain("fixture-access");
+		}
+		fetchSpy.mockRestore();
+	});
+
+	test("backs off SSE reconnects exponentially and cancels on close", async () => {
+		const root = await fixture();
+		await addRow(root, "default", Date.now() + 60_000);
+		const scheduled: Array<{ run: () => Promise<void>; delay: number; cancelled: boolean }> = [];
+		const fetchSpy = spyOn(globalThis, "fetch");
 		fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }), { status: 200, headers: { "Mcp-Session-Id": "fixture-session" } }));
 		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 202 }));
 		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 503 }));
-		const bridge = new UnsafeHuddoraBridge("default", { homeDir: root });
+		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 503 }));
+		const bridge = new UnsafeHuddoraBridge("default", {
+			homeDir: root,
+			schedule: (run, delay) => {
+				const task = { run: run as () => Promise<void>, delay, cancelled: false };
+				scheduled.push(task);
+				return task;
+			},
+			cancelSchedule: handle => {
+				(handle as { cancelled: boolean }).cancelled = true;
+			},
+		});
 		expect((await bridge.start(() => {})).ok).toBe(true);
-		await Promise.resolve();
-		expect(timerSpy).toHaveBeenCalledWith(expect.any(Function), 1_000);
+		expect(scheduled.map(task => task.delay)).toEqual([100]);
+		await scheduled[0]!.run();
+		expect(scheduled.map(task => task.delay)).toEqual([100, 1_000]);
+		await scheduled[1]!.run();
+		expect(scheduled.map(task => task.delay)).toEqual([100, 1_000, 2_000]);
 		await bridge.close();
-		const retry = timerSpy.mock.calls.find(call => call[1] === 1_000);
-		if (retry) await (retry[0] as () => void)();
-		expect(fetchSpy).toHaveBeenCalledTimes(4);
-		timerSpy.mockRestore();
+		expect(scheduled[2]!.cancelled).toBe(true);
 		fetchSpy.mockRestore();
 	});
+
+
+
+
 
 	test("closes its session with the token only in an Authorization header", async () => {
 		const root = await fixture();
@@ -171,11 +211,10 @@ describe("compatibility bridge credential boundary", () => {
 			}),
 		);
 		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 202 }));
-		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 200 }));
 		const bridge = new UnsafeHuddoraBridge("default", { homeDir: root });
 		expect((await bridge.start(() => {})).ok).toBe(true);
 		await bridge.close();
-		const close = fetchSpy.mock.calls.at(-1);
+		const close = fetchSpy.mock.calls.find(([, options]) => (options as RequestInit | undefined)?.method === "DELETE");
 		expect(close?.[1]).toMatchObject({ method: "DELETE", headers: { "Mcp-Session-Id": "fixture-session" } });
 		expect(String(close?.[1]?.body ?? "")).not.toContain("fixture-access");
 		fetchSpy.mockRestore();
