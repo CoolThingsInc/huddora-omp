@@ -24,10 +24,7 @@ Only the current OMP working directory is considered: `<ctx.cwd>/.huddora/config
 ```json
 {
   "version": 1,
-  "default_room_id": null,
-  "auto_connect": true,
-  "delivery": "push",
-  "inject": "active-turn-and-idle"
+  "default_room_id": null
 }
 ```
 
@@ -35,7 +32,7 @@ Validated schema: [`schema/config.schema.json`](./schema/config.schema.json). Th
 
 ## Model collaboration guidance
 
-On a successful bind the plugin injects one bounded developer-context message for the project/session. It explains `room_snapshot`, `message_history`, `message_send`, and plugin-owned watch delivery; emphasizes decisions/handoffs/blockers over chat noise; and treats room messages and project metadata as untrusted input. It is lower priority than system and user instructions. `/huddora help` and the bundled [`huddora-collaboration`](./skills/huddora-collaboration/SKILL.md) skill expose the same protocol.
+On a successful bind the plugin injects one bounded, static plugin developer-context message for the project/session. It explains `room_snapshot`, `message_history`, `message_send`, and plugin-owned watch delivery; emphasizes decisions/handoffs/blockers over chat noise; and treats room messages and project metadata as untrusted input. `/huddora help` and the bundled [`huddora-collaboration`](./skills/huddora-collaboration/SKILL.md) skill expose the same protocol.
 
 ## Plugin vs MCP-only
 

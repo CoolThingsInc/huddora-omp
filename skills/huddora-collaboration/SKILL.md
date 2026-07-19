@@ -1,6 +1,6 @@
 ---
 name: huddora-collaboration
-description: Collaborate safely in a Huddora room through its MCP tools.
+description: Open, catch up, send to, or manage a Huddora room safely with room_snapshot, message_history, message_send, and plugin-owned room_watch delivery.
 ---
 
 Use `room_snapshot` first to understand room members and recent context. Use `message_history` only to fill a known gap. Use `message_send` for a decision, handoff, blocker, or concise reply that advances work. The plugin owns `room_watch` and delivery.

@@ -1,50 +1,64 @@
-import { chmod, lstat, mkdir, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { chmod, lstat, mkdir, open, realpath, rename, unlink } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 
 export const PROJECT_CONFIG_VERSION = 1;
 export const PROJECT_CONFIG_FILENAME = ".huddora/config.json";
 
-export type DeliveryPreference = "push" | "poll" | "off";
-export type InjectPolicy = "active-turn-and-idle";
-
-export type ProjectConfig = {
-	version: 1;
-	default_room_id: string | null;
-	auto_connect: boolean;
-	delivery: DeliveryPreference;
-	inject: InjectPolicy;
-};
-
-export const DEFAULT_PROJECT_CONFIG: ProjectConfig = {
-	version: PROJECT_CONFIG_VERSION,
-	default_room_id: null,
-	auto_connect: true,
-	delivery: "push",
-	inject: "active-turn-and-idle",
-};
+/** A non-authoritative room selection hint. Transport and delivery stay in session state. */
+export type ProjectConfig = { version: 1; default_room_id: string | null };
+export const DEFAULT_PROJECT_CONFIG: ProjectConfig = { version: PROJECT_CONFIG_VERSION, default_room_id: null };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const KEYS = new Set(["version", "default_room_id", "auto_connect", "delivery", "inject"]);
+const KEYS = new Set(["version", "default_room_id"]);
+const LOCK_RETRY_MS = 20;
+const LOCK_RETRIES = 25;
 
 export type ProjectConfigResult =
-	| { ok: true; config: ProjectConfig; path: string; exists: boolean }
-	| { ok: false; config: ProjectConfig; path: string; error: string };
+	| { ok: true; config: ProjectConfig; path: string; exists: boolean; root: string }
+	| { ok: false; config: ProjectConfig; path: string; error: string; root: string | null };
 
-/** OMP supplies ctx.cwd as the current project root; never search ancestors or home. */
+/** Canonicalizes only OMP's supplied cwd. It never searches ancestors or home. */
+export async function resolveProjectRoot(projectRoot: string): Promise<string> {
+	const root = await realpath(projectRoot);
+	const info = await lstat(root);
+	if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("OMP project root must be a real directory");
+	const target = resolve(root, ".huddora", "config.json");
+	if (relative(root, target).startsWith("..")) throw new Error("config path escaped project root");
+	return root;
+}
+
 export async function loadProjectConfig(projectRoot: string): Promise<ProjectConfigResult> {
-	const path = join(projectRoot, PROJECT_CONFIG_FILENAME);
+	let root: string | null = null;
 	try {
-		await safeProjectRoot(projectRoot);
-		const stat = await lstat(path).catch(error => {
-			if (isMissing(error)) return null;
-			throw error;
-		});
-		if (!stat) return { ok: true, config: { ...DEFAULT_PROJECT_CONFIG }, path, exists: false };
-		if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("config must be a regular file");
-		const raw = JSON.parse(await readFile(path, "utf8")) as unknown;
-		return { ok: true, config: parseProjectConfig(raw), path, exists: true };
+		root = await resolveProjectRoot(projectRoot);
+		const directory = join(root, ".huddora");
+		const path = join(directory, "config.json");
+		const dirInfo = await lstat(directory).catch(error => (isMissing(error) ? null : Promise.reject(error)));
+		if (!dirInfo) return { ok: true, config: { ...DEFAULT_PROJECT_CONFIG }, path, exists: false, root };
+		assertPrivateDirectory(dirInfo);
+		const fileInfo = await lstat(path).catch(error => (isMissing(error) ? null : Promise.reject(error)));
+		if (!fileInfo) return { ok: true, config: { ...DEFAULT_PROJECT_CONFIG }, path, exists: false, root };
+		assertPrivateFile(fileInfo);
+		const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+		try {
+			const opened = await handle.stat();
+			if (opened.dev !== fileInfo.dev || opened.ino !== fileInfo.ino || !opened.isFile()) {
+				throw new Error("config changed while opening");
+			}
+			const raw = JSON.parse(await handle.readFile("utf8")) as unknown;
+			return { ok: true, config: parseProjectConfig(raw), path, exists: true, root };
+		} finally {
+			await handle.close();
+		}
 	} catch (error) {
-		return { ok: false, config: { ...DEFAULT_PROJECT_CONFIG }, path, error: message(error) };
+		return {
+			ok: false,
+			config: { ...DEFAULT_PROJECT_CONFIG },
+			path: join(projectRoot, PROJECT_CONFIG_FILENAME),
+			error: message(error),
+			root,
+		};
 	}
 }
 
@@ -54,47 +68,39 @@ export function parseProjectConfig(value: unknown): ProjectConfig {
 	for (const key of Object.keys(object)) if (!KEYS.has(key)) throw new Error(`unknown config key: ${key}`);
 	if (object.version !== PROJECT_CONFIG_VERSION) throw new Error(`version must be ${PROJECT_CONFIG_VERSION}`);
 	const room = object.default_room_id;
-	if (room !== null && (typeof room !== "string" || !UUID_RE.test(room))) throw new Error("default_room_id must be a UUID or null");
-	if (typeof object.auto_connect !== "boolean") throw new Error("auto_connect must be boolean");
-	if (object.delivery !== "push" && object.delivery !== "poll" && object.delivery !== "off") throw new Error("delivery must be push, poll, or off");
-	if (object.inject !== "active-turn-and-idle") throw new Error("inject must be active-turn-and-idle");
-	return { version: 1, default_room_id: room, auto_connect: object.auto_connect, delivery: object.delivery, inject: object.inject };
+	if (room !== null && (typeof room !== "string" || !UUID_RE.test(room))) {
+		throw new Error("default_room_id must be a UUID or null");
+	}
+	return { version: 1, default_room_id: room };
 }
 
-/** Creates only <OMP cwd>/.huddora/config.json, rejects every symlink, then renames a private temporary file. */
+/** Uses no-follow private files, an exclusive lock, fsync, and atomic rename under the canonical OMP root. */
 export async function writeProjectConfig(projectRoot: string, config: ProjectConfig): Promise<string> {
 	const checked = parseProjectConfig(config);
-	const root = await safeProjectRoot(projectRoot);
+	const root = await resolveProjectRoot(projectRoot);
 	const directory = join(root, ".huddora");
-	const dirStat = await lstat(directory).catch(error => {
-		if (isMissing(error)) return null;
-		throw error;
-	});
-	if (dirStat) {
-		if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) throw new Error(".huddora must be a directory, not a symlink");
-	} else {
-		await mkdir(directory, { mode: 0o700 }).catch(async error => {
-			if (!isAlreadyExists(error)) throw error;
-			const raced = await lstat(directory);
-			if (raced.isSymbolicLink() || !raced.isDirectory()) throw new Error(".huddora must be a directory, not a symlink");
-		});
-	}
-	await chmod(directory, 0o700);
-	const path = join(directory, "config.json");
-	const existing = await lstat(path).catch(error => {
-		if (isMissing(error)) return null;
-		throw error;
-	});
-	if (existing && (existing.isSymbolicLink() || !existing.isFile())) throw new Error("config must be a regular file");
-	const temporary = join(directory, `.config.${process.pid}.${crypto.randomUUID()}.tmp`);
+	await ensurePrivateDirectory(directory);
+	const lock = await acquireLock(join(directory, ".config.lock"));
 	try {
-		await writeFile(temporary, `${JSON.stringify(checked, null, "\t")}\n`, { mode: 0o600, flag: "wx" });
-		await chmod(temporary, 0o600);
+		const path = join(directory, "config.json");
+		const existing = await lstat(path).catch(error => (isMissing(error) ? null : Promise.reject(error)));
+		if (existing) assertPrivateFile(existing);
+		const temporary = join(directory, `.config.${process.pid}.${crypto.randomUUID()}.tmp`);
+		const handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+		try {
+			const created = await handle.stat();
+			if (!created.isFile() || created.nlink !== 1) throw new Error("temporary config is not a private regular file");
+			await handle.writeFile(`${JSON.stringify(checked, null, "\t")}\n`, "utf8");
+			await handle.sync();
+		} finally {
+			await handle.close();
+		}
 		await rename(temporary, path);
-		await chmod(path, 0o600);
+		await syncDirectory(directory);
 		return path;
 	} finally {
-		await unlink(temporary).catch(() => undefined);
+		await lock.close().catch(() => undefined);
+		await unlink(join(directory, ".config.lock")).catch(() => undefined);
 	}
 }
 
@@ -103,27 +109,66 @@ export async function setDefaultRoom(projectRoot: string, roomId: string | null)
 	const loaded = await loadProjectConfig(projectRoot);
 	if (!loaded.ok) throw new Error(loaded.error);
 	const config = { ...loaded.config, default_room_id: roomId };
-	await writeProjectConfig(projectRoot, config);
+	await writeProjectConfig(loaded.root, config);
 	return config;
 }
 
-async function safeProjectRoot(projectRoot: string): Promise<string> {
-	const root = await realpath(projectRoot);
-	const stat = await lstat(root);
-	if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("OMP project root must be a real directory");
-	const target = resolve(root, ".huddora", "config.json");
-	if (relative(root, target).startsWith("..")) throw new Error("config path escaped project root");
-	return root;
+async function ensurePrivateDirectory(directory: string): Promise<void> {
+	const info = await lstat(directory).catch(error => (isMissing(error) ? null : Promise.reject(error)));
+	if (!info) {
+		await mkdir(directory, { mode: 0o700 }).catch(async error => {
+			if (!isAlreadyExists(error)) throw error;
+		});
+		const raced = await lstat(directory);
+		assertPrivateDirectory(raced);
+		await chmod(directory, 0o700);
+		return;
+	}
+	assertPrivateDirectory(info);
+}
+
+async function acquireLock(path: string) {
+	for (let attempt = 0; attempt < LOCK_RETRIES; attempt++) {
+		try {
+			return await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+		} catch (error) {
+			if (!isAlreadyExists(error)) throw error;
+			await new Promise(resolve => setTimeout(resolve, LOCK_RETRY_MS));
+		}
+	}
+	throw new Error("config is busy; retry the command");
+}
+
+async function syncDirectory(directory: string): Promise<void> {
+	const handle = await open(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+	try {
+		await handle.sync();
+	} finally {
+		await handle.close();
+	}
+}
+
+function assertPrivateDirectory(info: Awaited<ReturnType<typeof lstat>>): void {
+	if (info.isSymbolicLink() || !info.isDirectory()) throw new Error(".huddora must be a directory, not a symlink");
+	assertOwnedAndPrivate(info, ".huddora");
+}
+
+function assertPrivateFile(info: Awaited<ReturnType<typeof lstat>>): void {
+	if (info.isSymbolicLink() || !info.isFile()) throw new Error("config must be a regular file");
+	assertOwnedAndPrivate(info, "config");
+}
+
+function assertOwnedAndPrivate(info: Awaited<ReturnType<typeof lstat>>, label: string): void {
+	if (process.getuid && info.uid !== process.getuid()) throw new Error(`${label} is not owned by this user`);
+	if ((Number(info.mode) & 0o077) !== 0) throw new Error(`${label} must not be group/world accessible`);
 }
 
 function isAlreadyExists(error: unknown): boolean {
 	return Boolean(error && typeof error === "object" && "code" in error && error.code === "EEXIST");
 }
-
 function isMissing(error: unknown): boolean {
 	return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
 }
-
 function message(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
