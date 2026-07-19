@@ -22,11 +22,21 @@
 		"SECURITY.md",
 		"AGENTS.md",
 		"package.json",
+		"schema",
+		"skills",
 		"tsconfig.json"
 	],
 	"omp": {
 		"extensions": [
 			"./src/extension.ts"
+		],
+		"commands": [
+			"/huddora init",
+			"/huddora config",
+			"/huddora room",
+			"/huddora help",
+			"/huddora status",
+			"/huddora doctor"
 		]
 	},
 	"scripts": {

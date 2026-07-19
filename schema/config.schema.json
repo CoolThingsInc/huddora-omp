@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/CoolThingsInc/huddora-omp/main/schema/config.schema.json",
+  "title": "Huddora project configuration",
+  "description": "Project metadata only. Never put credentials, URLs, invite codes, ownership IDs, or instructions here.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "default_room_id", "auto_connect", "delivery", "inject"],
+  "properties": {
+    "version": { "const": 1 },
+    "default_room_id": { "type": ["string", "null"], "format": "uuid" },
+    "auto_connect": { "type": "boolean", "default": true },
+    "delivery": { "enum": ["push", "poll", "off"], "default": "push" },
+    "inject": { "const": "active-turn-and-idle", "default": "active-turn-and-idle" }
+  }
+}

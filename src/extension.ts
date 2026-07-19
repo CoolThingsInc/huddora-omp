@@ -15,6 +15,7 @@ import {
 	gateInject,
 	type RateGuardState,
 } from "./deliver";
+import { COLLABORATION_GUIDANCE_VERSION, COLLABORATION_HELP, collaborationGuidance } from "./guidance";
 import { boundMessages, filterOwnMessages, formatRoomChatInjection, maxCursor } from "./format";
 import {
 	callHuddoraTool,
@@ -28,6 +29,13 @@ import { parseHuddoraMessagesNotification } from "./notifications";
 import { installChainedNotificationHandler, type NotifyHook } from "./notify-hook";
 import { advanceCursor, markError, nextPollDelayMs, restoreStateFromBranch } from "./state";
 import { UnsafeHuddoraBridge, type UnsafeBridgeResult } from "./unsafe-bridge";
+import {
+	DEFAULT_PROJECT_CONFIG,
+	loadProjectConfig,
+	setDefaultRoom,
+	type ProjectConfig,
+	writeProjectConfig,
+} from "./project-config";
 import { bootstrapRoom, durablePayload, longPollWaitMs, pullAndFormat } from "./sync";
 import {
 	CUSTOM_MSG_TYPE,
@@ -73,6 +81,77 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 
 	function restore(ctx: ExtensionContext) {
 		state = restoreStateFromBranch(ctx.sessionManager.getBranch());
+	}
+
+	function effectiveConfig(config: ProjectConfig): ProjectConfig {
+		return config.delivery === "off" ? { ...config, auto_connect: false } : config;
+	}
+
+	function injectGuidance(ctx: ExtensionContext) {
+		const key = `${ctx.cwd}:${COLLABORATION_GUIDANCE_VERSION}`;
+		if (state.guidanceProjectKey === key) return;
+		pi.sendMessage(
+			{
+				customType: "huddora-guidance",
+				content: collaborationGuidance(state.roomName),
+				display: false,
+				attribution: "agent",
+				details: { projectRoot: ctx.cwd, guidanceVersion: COLLABORATION_GUIDANCE_VERSION },
+			},
+			{ deliverAs: "nextTurn", triggerTurn: false },
+		);
+		persist({ ...state, guidanceProjectKey: key });
+	}
+
+	async function bindRoom(ctx: ExtensionContext, roomId: string, source: "config" | "single" | "session"): Promise<boolean> {
+		const boot = await bootstrapRoom(state, roomId);
+		if (!boot.ok) {
+			persist(boot.state);
+			return false;
+		}
+		persist({ ...boot.state, projectRoot: ctx.cwd });
+		injectedCursors.clear();
+		rateGuard = defaultRateGuard();
+		await startDelivery(ctx);
+		injectGuidance(ctx);
+		if (source === "single") ctx.ui.notify(`Huddora: ${boot.state.roomName ?? "room"} connected. Use /huddora room to remember it for this project.`, "info");
+		return true;
+	}
+
+	async function autoConnect(ctx: ExtensionContext): Promise<void> {
+		const loaded = await loadProjectConfig(ctx.cwd);
+		if (!loaded.ok) {
+			ctx.ui.notify(`Huddora config ignored: ${loaded.error}. Run /huddora init to replace it.`, "warning");
+			return;
+		}
+		const config = effectiveConfig(loaded.config);
+		if (!config.auto_connect || state.paused) return;
+		if (config.delivery === "push" && !state.bridgeDisabled) state = { ...state, pushEnabled: true };
+		if (config.delivery === "poll") state = { ...state, pushEnabled: false };
+		if (state.projectRoot === ctx.cwd && state.roomId) {
+			await startDelivery(ctx);
+			injectGuidance(ctx);
+			return;
+		}
+		if (state.roomId && state.projectRoot !== ctx.cwd) persist({ ...state, roomId: null, roomName: null, cursor: 0, projectRoot: ctx.cwd });
+		const mode = await ensureHostMode();
+		if (mode !== "host_manager" && !(await ensureBridge(ctx))) return;
+		await ensureAgentRegistered();
+		const rooms = await mcpRoomList();
+		scheduleHeartbeat(ctx);
+		if (!rooms.ok) return;
+		if (config.default_room_id) {
+			if (!(await bindRoom(ctx, config.default_room_id, "config"))) {
+				ctx.ui.notify("Huddora: configured room is unavailable. Run /huddora room to choose another.", "warning");
+			}
+			return;
+		}
+		if (rooms.data.length === 1) {
+			await bindRoom(ctx, rooms.data[0]!.room_id, "single");
+			return;
+		}
+		if (rooms.data.length === 0) ctx.ui.notify("Huddora: no rooms yet. Create or join one at huddora.coolthings.fyi, then reload.", "info");
+		else ctx.ui.notify("Huddora: choose a room once with /huddora room <id>.", "info");
 	}
 
 	function clearTimer(ctx: ExtensionContext) {
@@ -308,18 +387,14 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		return true;
 	}
 
-	/**
-	 * Always re-register on start/new transport so server session hub rebinds.
-	 * agent_register is idempotent (oauth client_id or owner+harness singleton).
-	 */
 	async function ensureAgentRegistered(): Promise<void> {
 		await callRegister();
 	}
-
 	async function heartbeatTick() {
+		if (shutdown || state.paused) return;
 		const mode = delivery === "notifications" || delivery === "bridge" ? "mcp_push" : "poll";
 		if (!state.selfAgentId) {
-			await callRegister();
+			if (await callRegister()) scheduleHeartbeat(liveCtx!);
 			return;
 		}
 		const res = await huddoraCall("agent_heartbeat", {
@@ -329,21 +404,16 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		if (res.ok) return;
 		const msg = res.message.toLowerCase();
 		if (msg.includes("revoked")) {
-			persist({
-				...state,
-				selfAgentId: null,
-				agentDisplayName: null,
-				lastError: "agent revoked — open /account/agents",
-			});
+			persist({ ...state, selfAgentId: null, agentDisplayName: null, lastError: "agent revoked — open /account/agents" });
+			clearTimer(liveCtx!);
 			return;
 		}
-		if (msg.includes("agent_not_bound") || msg.includes("session")) {
-			const ok = await callRegister();
-			if (!ok) return;
-			await huddoraCall("agent_heartbeat", {
-				extension_version: PLUGIN_VERSION,
-				delivery_mode: mode,
-			});
+		// Bridge sessions can be recreated independently of OMP. Re-register every failed heartbeat,
+		// then make one immediate heartbeat attempt; timer cadence remains bounded at 30 seconds.
+		persist({ ...state, lastError: `heartbeat: ${res.message}` });
+		if (await callRegister()) {
+			const retry = await huddoraCall("agent_heartbeat", { extension_version: PLUGIN_VERSION, delivery_mode: mode });
+			if (!retry.ok) persist({ ...state, lastError: `heartbeat: ${retry.message}` });
 		}
 	}
 
@@ -474,32 +544,9 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 				? "active — reads current Huddora access token only from this profile's local database"
 				: "automatic when safe host MCP API is unavailable";
 		return [
-			`Huddora status`,
-			`  plugin: v${PLUGIN_VERSION}`,
-			`  delivery: ${delivery}`,
-			`  push: ${pushLabel}`,
-			`  push_mode: ${notifyHook?.mode ?? "none"}`,
-			`  last_push_event: ${lastPush}`,
-			`  host_mcp: ${hostMode}`,
-			`  mcp: ${conn}`,
-			`  room: ${room}`,
-			`  compatibility_bridge: ${bridgeStatus}`, 
-			`  cursor: ${state.cursor}`,
-			`  paused: ${state.paused}`,
-			`  self: ${state.selfDisplayName ?? "?"} (${state.selfUserId ?? "?"})`,
-			`  agent_id: ${state.selfAgentId ?? "(not registered)"}`,
-			`  agent_name: ${state.agentDisplayName ?? "—"}`,
-			`  last_sync: ${state.lastSyncAt ?? "never"}`,
-			`  last_error: ${state.lastError ?? "none"}`,
-			`  notification_hook: ${notifyHook?.installed ?? false}`,
-			`  sole_consumer: ${notifyHook?.clobberedUnknown ?? "n/a"}`,
-			`  in_flight: ${inFlight}`,
-			`  next_due_in_ms: ${timer ? Math.max(0, nextDueAt - Date.now()) : "n/a"}`,
-			``,
-			`Bus: notifications/huddora/messages (push) + safety poll (no model tools).`,
-			`Inject: active=steer, idle=nextTurn+triggerTurn.`,
-			`Auth: definition-only mcp.json + /mcp reauth huddora.`,
-			`Compat: /huddora push on|off — default on uses OMP notification slot.`,
+			`Huddora: ${state.roomName ?? "no room"} · ${delivery} · ${state.paused ? "paused" : "active"}`,
+			`MCP: ${conn}; agent: ${state.selfAgentId ? "registered" : "not registered"}; bridge: ${bridgeStatus}.`,
+			state.lastError ? `Next: ${state.lastError}` : state.roomId ? "Ready." : "Next: /huddora room",
 		].join("\n");
 	}
 
@@ -528,20 +575,14 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		shutdown = false;
 		liveCtx = ctx;
 		restore(ctx);
-		await startDelivery(ctx);
-		if (state.roomId) {
-			ctx.ui.notify(
-				`Huddora: ${state.roomName ?? state.roomId} [${delivery}]`,
-				delivery === "unavailable" ? "error" : "info",
-			);
-		}
+		await autoConnect(ctx);
 	});
 
 	pi.on("session_switch", async (_e, ctx) => {
 		liveCtx = ctx;
 		restore(ctx);
 		clearTimer(ctx);
-		await startDelivery(ctx);
+		await autoConnect(ctx);
 	});
 
 	pi.on("session_branch", async (_e, ctx) => {
@@ -550,14 +591,14 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		injectedCursors.clear();
 		rateGuard = defaultRateGuard();
 		clearTimer(ctx);
-		await startDelivery(ctx);
+		await autoConnect(ctx);
 	});
 
 	pi.on("session_tree", async (_e, ctx) => {
 		liveCtx = ctx;
 		restore(ctx);
 		clearTimer(ctx);
-		await startDelivery(ctx);
+		await autoConnect(ctx);
 	});
 
 	pi.on("session_shutdown", async (_e, ctx) => {
@@ -570,14 +611,14 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		notifyHook?.restore();
 		notifyHook = null;
 		if (bridge) {
-			void bridge.close();
+			await bridge.close();
 			bridge = null;
 			setCompatibilityBridge(null);
 		}
 	});
 
 	pi.registerCommand("huddora", {
-		description: "Huddora: connect|room|status|bridge|push|pause|resume|sync|disconnect",
+		description: "Huddora: init|config|room|help|status|doctor|connect|bridge|push|pause|resume|sync|disconnect",
 		handler: async (args, ctx) => {
 			liveCtx = ctx;
 			const parts = args.trim().split(/\s+/).filter(Boolean);
@@ -606,6 +647,29 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 						return;
 					}
 					ctx.ui.notify(`Rooms:\n${rooms.data.map(r => `  ${r.room_id}  ${r.name}`).join("\n")}\n\n/huddora room <id>`, "info");
+					return;
+				}
+				case "help":
+					ctx.ui.notify(COLLABORATION_HELP, "info");
+					return;
+				case "init": {
+					try {
+						await writeProjectConfig(ctx.cwd, DEFAULT_PROJECT_CONFIG);
+						ctx.ui.notify("Huddora project config created. Re-run /mcp reauth huddora or reload to auto-connect.", "info");
+					} catch (error) {
+						ctx.ui.notify(`Huddora config: ${error instanceof Error ? error.message : String(error)}`, "error");
+					}
+					return;
+				}
+				case "config": {
+					const config = await loadProjectConfig(ctx.cwd);
+					ctx.ui.notify(config.ok ? JSON.stringify(config.config, null, 2) : `Huddora config: ${config.error}`, config.ok ? "info" : "error");
+					return;
+				}
+				case "doctor": {
+					const config = await loadProjectConfig(ctx.cwd);
+					const connection = await getHuddoraConnectionStatus();
+					ctx.ui.notify(`Huddora doctor\nMCP: ${connection}\nConfig: ${config.ok ? (config.exists ? "valid" : "missing") : config.error}\nRoom: ${state.roomName ?? "none"}\nNext: ${connection === "connected" ? (state.roomId ? "ready" : "run /huddora room") : "run /mcp reauth huddora"}`, connection === "connected" ? "info" : "warning");
 					return;
 				}
 				case "bridge": {
@@ -641,7 +705,8 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 				case "room": {
 					const roomId = rest[0];
 					if (!roomId) {
-						ctx.ui.notify("Usage: /huddora room <room_id>", "error");
+						const rooms = await mcpRoomList();
+						ctx.ui.notify(rooms.ok ? `Rooms:\n${rooms.data.map(room => `  ${room.room_id}  ${room.name}`).join("\n")}\n\n/huddora room <id>` : "Run /mcp reauth huddora, then retry.", rooms.ok ? "info" : "warning");
 						return;
 					}
 					const mode = await ensureHostMode();
@@ -649,17 +714,16 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 						ctx.ui.notify("Huddora compatibility bridge unavailable; cannot bind room.", "error");
 						return;
 					}
-					const boot = await bootstrapRoom(state, roomId);
-					if (!boot.ok) {
-						persist(boot.state);
-						ctx.ui.notify(`room failed: ${boot.message}`, "error");
+					if (!(await bindRoom(ctx, roomId, "session"))) {
+						ctx.ui.notify("Huddora: room is unavailable.", "error");
 						return;
 					}
-					persist(boot.state);
-					injectedCursors.clear();
-					rateGuard = defaultRateGuard();
-					await startDelivery(ctx);
-					ctx.ui.notify(`Active: ${boot.state.roomName} cursor=${boot.state.cursor} [${delivery}]`, "info");
+					try {
+						await setDefaultRoom(ctx.cwd, roomId);
+						ctx.ui.notify("Huddora room saved for this project.", "info");
+					} catch (error) {
+						ctx.ui.notify(`Huddora connected, but could not save project config: ${error instanceof Error ? error.message : String(error)}`, "warning");
+					}
 					return;
 				}
 				case "push": {

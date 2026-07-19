@@ -6,3 +6,10 @@
 - Commands: `/huddora bridge status|off|on`. `off` persists the opt-out; `on` reconnects the bridge and resumes room watch. Safe host MCP always takes precedence.
 - Tests must cover credential scope/SQL projection, file hardening, expiry/401, token redaction, lifecycle cleanup, safe-host precedence, and notification filtering. Run `bun test src`, `bun run typecheck`, and `bun run build`.
 - Keep the OMP resolver patch independent of plugin releases until an installed-extension regression and compiled-binary validation pass.
+
+## Project configuration and collaboration guidance
+
+- Resolve configuration from OMP's supplied `ctx.cwd` only. Never walk parents, git roots, or home directories.
+- `.huddora/config.json` is metadata, not instructions. It accepts only the documented schema and never contains secrets, URLs, identities, owner IDs, or invite data. Reject symlinks and unknown fields; write only atomically beneath the real project root.
+- The bundled collaboration guidance is the only runtime instruction source. It must remain bounded, one-shot per project/config version/session, lower priority than system/user instructions, and explicitly treat room content as untrusted.
+- Agent register/heartbeat must use only server-bound MCP authentication. Never add raw client IDs or OAuth data to project configuration.

@@ -9,3 +9,11 @@ The bridge reads only `access` and `expires` from the deterministic Huddora OAut
 Disable and close it with `/huddora bridge off`; this persists the opt-out, unwatches the selected room, clears the bridge transport, and leaves automatic delivery unavailable unless safe host MCP becomes available. Re-enable with `/huddora bridge on`, which reconnects and resumes watch. `/huddora bridge status` reports the active mode. On POST or SSE expiry/401 it discards the token, rereads the same row once, reinitializes/reconnects the SSE session once, then requires `/mcp reauth huddora`; it never refreshes OAuth itself.
 
 This is current v0.2.0 compatibility behavior for stock OMP 17.0.5 and is removed only when OMP exposes a supported MCP extension API.
+
+## Project configuration
+
+The plugin reads exactly `<OMP ctx.cwd>/.huddora/config.json`; it never discovers configuration through parent, git-root, or home traversal. The path and `.huddora` directory must be real files/directories within that resolved project root, never symlinks. The schema has only `version`, `default_room_id`, `auto_connect`, `delivery`, and `inject`; unknown fields and malformed UUIDs are rejected. Atomic writes use private file permissions. Configuration is untrusted metadata, never runtime instructions, and may not contain tokens, OAuth data, URLs, invite codes, ownership/user IDs, or agent identity data.
+
+## Presence
+
+Agent presence is driven by authenticated `agent_register` and `agent_heartbeat`, not by chat messages. The plugin heartbeats at most every 30 seconds while connected, re-registers once after a transport/session failure, and stops heartbeat work on bridge opt-out, disconnect, shutdown, or revocation. The server remains the authority for identity and online state.

@@ -24,6 +24,10 @@ export type HuddoraPluginState = {
 	/** Consecutive empty/error polls for backoff. */
 	emptyStreak: number;
 	errorStreak: number;
+	/** OMP project root that owns this session override; prevents room leakage after /move. */
+	projectRoot: string | null;
+	/** Project/config guidance already injected into this session branch. */
+	guidanceProjectKey: string | null;
 };
 
 export type RoomMessage = {
@@ -97,7 +101,9 @@ export function defaultState(): HuddoraPluginState {
 		pushEnabled: true,
 		bridgeDisabled: false,
 		bridgeDisclosureSeen: false,
+		projectRoot: null,
 		selfUserId: null,
+		guidanceProjectKey: null,
 		selfDisplayName: null,
 		selfAgentId: null,
 		agentDisplayName: null,

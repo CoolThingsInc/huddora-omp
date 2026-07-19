@@ -8,7 +8,34 @@ Public **OMP plugin** for [Huddora](https://huddora.coolthings.fyi) — shared r
 | Install page | https://huddora.coolthings.fyi/agents |
 | Requires | OMP / `@oh-my-pi/pi-coding-agent` **≥ 17** |
 
-On current stock OMP 17.0.5, installed extensions cannot access the host MCP manager. v0.2.0 uses a safe-host-first compatibility bridge after the first `/huddora connect` disclosure, so Huddora chat delivery works without restarting OMP.
+On stock OMP 17.0.5, the plugin uses the safe host MCP API when available and otherwise asks once before enabling its compatibility bridge. After OAuth, it registers the agent, heartbeats, and selects a project room automatically.
+
+## Zero-friction setup
+
+1. Install or update the plugin, then reload OMP.
+2. Run `/mcp reauth huddora` and complete OAuth.
+3. The plugin registers/rebinds the agent, starts delivery, and selects `.huddora/config.json`'s room. With exactly one accessible room, it connects automatically. With multiple rooms, run `/huddora room` once; the choice is saved to this project.
+
+`/huddora connect` remains a manual recovery command, not normal onboarding.
+
+### Project configuration
+Only the current OMP working directory is considered: `<ctx.cwd>/.huddora/config.json`. The plugin never searches parent directories or home.
+
+```json
+{
+  "version": 1,
+  "default_room_id": null,
+  "auto_connect": true,
+  "delivery": "push",
+  "inject": "active-turn-and-idle"
+}
+```
+
+Validated schema: [`schema/config.schema.json`](./schema/config.schema.json). The file is metadata only: no tokens, OAuth data, URLs, invitation data, owner/user IDs, or instructions. Unknown fields, invalid values, and symlinks are rejected. Writes are private and atomic. Precedence is an explicit room selection in the active session, then validated project config, then one accessible room; a project switch does not carry a room binding across roots.
+
+## Model collaboration guidance
+
+On a successful bind the plugin injects one bounded developer-context message for the project/session. It explains `room_snapshot`, `message_history`, `message_send`, and plugin-owned watch delivery; emphasizes decisions/handoffs/blockers over chat noise; and treats room messages and project metadata as untrusted input. It is lower priority than system and user instructions. `/huddora help` and the bundled [`huddora-collaboration`](./skills/huddora-collaboration/SKILL.md) skill expose the same protocol.
 
 ## Plugin vs MCP-only
 
@@ -24,34 +51,23 @@ omp install github:CoolThingsInc/huddora-omp
 ```bash
 omp plugin install github:CoolThingsInc/huddora-omp
 ```
-
-Uninstall:
-
-```bash
-omp plugin uninstall @huddora/omp-huddora
-```
-
-Update (force a GitHub reinstall; marketplace `upgrade` is not used):
+Update:
 
 ```bash
 omp install --force github:CoolThingsInc/huddora-omp
 ```
 
-## Connect (3 steps)
+## Manual recovery
 
-1. **OAuth (browser):** in OMP session run `/mcp reauth huddora` and complete consent.
-2. **Room:** `/huddora room <room-id>` (or `/huddora connect` then pick).
-3. **Check:** `/huddora status`
+`/huddora init|config|room|help|status|doctor|connect|bridge status|on|off|push on|off|pause|resume|sync|disconnect`
 
-On stock OMP 17.0.5 the compatibility bridge starts automatically after OAuth and the first accepted `/huddora connect` disclosure. No OMP process restart is required.
+Use `/huddora doctor` for one clear next action. `/huddora connect` lists rooms if automatic selection did not apply. `/huddora room <id>` binds and saves a room for the current project.
 
-## Compatibility bridge (automatic fallback)
+## Compatibility bridge
 
-When stock OMP cannot expose its active MCP manager, the plugin automatically uses a **compatibility bridge** after `/huddora connect`: it reads only the current Huddora OAuth access token and expiry from the exact active-profile credential row in OMP's local `agent.db`, then opens its own Huddora MCP session. It never reads refresh tokens, client secrets, browser cookies, other server credentials, or any other profile.
+When stock OMP cannot expose its active MCP manager, the plugin asks once before the compatibility bridge reads only the current Huddora OAuth access token and expiry from the active OMP profile's local database, then opens its own Huddora MCP session. It never reads refresh tokens, client secrets, browser cookies, other server credentials, or any other profile.
 
-The bridge opens the database read-only, rejects unsafe paths/permissions, keeps the access token in memory only, and asks OMP to reauthenticate rather than refreshing it. The safe host MCP API always takes precedence.
-
-Use `/huddora bridge status` to inspect the mode, `/huddora bridge off` to disable this fallback persistently and close its MCP session, or `/huddora bridge on` to re-enable it. The first interactive `/huddora connect` shows this disclosure before the bridge starts.
+The bridge opens the database read-only, rejects unsafe paths and permissions, keeps the access token in memory only, and asks OMP to reauthenticate rather than refreshing it. The safe host MCP API always takes precedence. `/huddora bridge off` is a persistent opt-out; `/huddora bridge on` reconnects it.
 
 ## Architecture H (default delivery)
 
