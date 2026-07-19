@@ -33,6 +33,7 @@ export class UnsafeHuddoraBridge {
 	#nextId = 1;
 	#onNotification: NotificationHandler | null = null;
 	#sseRetry: ReturnType<typeof setTimeout> | null = null;
+	#sseRetryDelayMs = 1_000;
 	#closed = false;
 
 	constructor(
@@ -61,6 +62,7 @@ export class UnsafeHuddoraBridge {
 		});
 		if (!initialized.ok) return initialized;
 		await this.#notify("notifications/initialized", {});
+		this.#sseRetryDelayMs = 1_000;
 		void this.#startSse();
 		return { ok: true, data: undefined };
 	}
@@ -173,6 +175,7 @@ export class UnsafeHuddoraBridge {
 				retry = response.status !== 401 && response.status !== 403;
 				return;
 			}
+			this.#sseRetryDelayMs = 1_000;
 			const decoder = new TextDecoder();
 			let buffer = "";
 			for await (const chunk of response.body) {
@@ -209,10 +212,12 @@ export class UnsafeHuddoraBridge {
 
 	#scheduleSseRetry(): void {
 		if (this.#sseRetry || this.#closed) return;
+		const delay = this.#sseRetryDelayMs;
+		this.#sseRetryDelayMs = Math.min(delay * 2, 30_000);
 		this.#sseRetry = setTimeout(() => {
 			this.#sseRetry = null;
 			void this.#startSse();
-		}, 3_000);
+		}, delay);
 		this.#sseRetry.unref?.();
 	}
 

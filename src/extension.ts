@@ -566,9 +566,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		clearTimer(ctx);
 		inFlight = false;
 		liveCtx = null;
-		if (state.roomId && hostMode === "host_manager") {
-			void callHuddoraTool("room_unwatch", { room_id: state.roomId });
-		}
+		if (state.roomId) await huddoraCall("room_unwatch", { room_id: state.roomId });
 		notifyHook?.restore();
 		notifyHook = null;
 		if (bridge) {

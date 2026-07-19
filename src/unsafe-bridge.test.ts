@@ -140,6 +140,26 @@ describe("compatibility bridge credential boundary", () => {
 	});
 
 
+	test("backs off after an SSE failure and cancels retries on close", async () => {
+		const root = await fixture();
+		await addRow(root, "default", Date.now() + 60_000);
+		const fetchSpy = spyOn(globalThis, "fetch");
+		const timerSpy = spyOn(globalThis, "setTimeout");
+		fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }), { status: 200, headers: { "Mcp-Session-Id": "fixture-session" } }));
+		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 202 }));
+		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 503 }));
+		const bridge = new UnsafeHuddoraBridge("default", { homeDir: root });
+		expect((await bridge.start(() => {})).ok).toBe(true);
+		await Promise.resolve();
+		expect(timerSpy).toHaveBeenCalledWith(expect.any(Function), 1_000);
+		await bridge.close();
+		const retry = timerSpy.mock.calls.find(call => call[1] === 1_000);
+		if (retry) await (retry[0] as () => void)();
+		expect(fetchSpy).toHaveBeenCalledTimes(4);
+		timerSpy.mockRestore();
+		fetchSpy.mockRestore();
+	});
+
 	test("closes its session with the token only in an Authorization header", async () => {
 		const root = await fixture();
 		await addRow(root, "default", Date.now() + 60_000);
