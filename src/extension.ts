@@ -109,6 +109,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		});
 		return {
 			pluginVersion: PLUGIN_VERSION,
+			lastExtensionVersion: state.lastExtensionVersion,
 			agentDisplayName: state.agentDisplayName,
 			selfAgentId: state.selfAgentId,
 			roomId: state.roomId,
@@ -858,8 +859,9 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 						bridgeError: state.lastError,
 					});
 					const roomLine = formatBoundRoomLine(state.roomId, state.roomName) ?? "Room: none";
+					const stamp = state.lastExtensionVersion ?? "none";
 					ctx.ui.notify(
-						`Huddora doctor\nPlugin: ${connection}\nSession: ${bridge ? "active" : "not started"}\nConfig: ${config.ok ? (config.exists ? "valid" : "missing") : config.error}\n${roomLine}\nDelivery: ${deliveryLabel}\nNext: ${next}`,
+						`Huddora doctor\nLoaded plugin: v${PLUGIN_VERSION} (this OMP process)\nLast seat stamp: ${stamp}\nHost agent_list extension_version = last successful agent_register from loaded plugin — not the web UI.\nAfter plugin upgrade: full OMP process restart (not only /huddora connect), then reauth if needed.\nPlugin: ${connection}\nSession: ${bridge ? "active" : "not started"}\nConfig: ${config.ok ? (config.exists ? "valid" : "missing") : config.error}\n${roomLine}\nDelivery: ${deliveryLabel}\nNext: ${next}`,
 						state.roomId || transportReady ? "info" : "warning",
 					);
 					return;

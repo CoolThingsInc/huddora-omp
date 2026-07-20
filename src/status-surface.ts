@@ -11,6 +11,8 @@ export type Presence = "online" | "offline" | "needs_setup" | "revoked";
 
 export type StatusSurfaceInput = {
 	pluginVersion: string;
+	/** Last PLUGIN_VERSION this process successfully registered (may lag until rebind). */
+	lastExtensionVersion?: string | null;
 	agentDisplayName: string | null;
 	selfAgentId: string | null;
 	roomId: string | null;
@@ -124,6 +126,11 @@ export function formatStatusReport(input: StatusSurfaceInput): string {
 	const session = input.bridgeActive
 		? "active (auto)"
 		: "starting — needs OAuth token after /mcp reauth huddora";
+	const stamped = input.lastExtensionVersion?.trim() || "none yet";
+	const versionNote =
+		stamped === input.pluginVersion
+			? `Loaded plugin v${input.pluginVersion} (this process). Seat stamp matches.`
+			: `Loaded plugin v${input.pluginVersion} (this process). Last seat stamp: ${stamped}. Host agent_list extension_version updates only after this process agent_register — not from the web UI. After plugin upgrade: full OMP restart, then /huddora connect.`;
 	const next = input.lastError
 		? `Next: ${input.lastError}`
 		: input.roomId
@@ -132,6 +139,7 @@ export function formatStatusReport(input: StatusSurfaceInput): string {
 	const pause = input.paused ? `  ${I.pause} paused` : "";
 	return [
 		`${I.brand} Huddora ${input.pluginVersion}  ${p.icon} ${p.label}${pause}`,
+		versionNote,
 		`${I.agent} Agent: ${agent}${input.selfAgentId ? " (registered)" : " (not registered)"}`,
 		`${I.room} Room: ${room}`,
 		roomIdLine,

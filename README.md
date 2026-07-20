@@ -14,12 +14,13 @@ Always-visible footer status (OMP `ctx.ui.setStatus`): agent display name, plugi
 
 ## Zero-friction setup
 
-1. Install or update the plugin (`omp plugin install @huddora/omp-huddora@0.3.10` or `--force`), then reload OMP.
-2. Run `/mcp reauth huddora` and complete OAuth (needed so the bridge can read an access token).
-3. Accept the one-shot plugin MCP session disclosure if prompted (shown once; auto thereafter).
-4. The plugin registers/rebinds the agent with an install-local `session_key` seat (`~/.config/huddora/session_key`), starts delivery, and selects `.huddora/config.json`'s room. With exactly one accessible room, it connects automatically. With multiple rooms, run `/huddora room` once; saving the project default requires confirmation.
+1. Install or update the plugin (`omp plugin install @huddora/omp-huddora@0.3.11` or `--force`).
+2. **Fully quit and restart the OMP process** (not only a session reload or `/huddora connect`). OMP keeps the previously loaded plugin module in memory; the footer version is the **loaded** module (`PLUGIN_VERSION`), not the plugins lock file.
+3. Run `/mcp reauth huddora` and complete OAuth (needed so the bridge can read an access token).
+4. Accept the one-shot plugin MCP session disclosure if prompted (shown once; auto thereafter).
+5. The plugin registers/rebinds the agent with an install-local `session_key` seat (`~/.config/huddora/session_key`), starts delivery, and selects `.huddora/config.json`'s room. With exactly one accessible room, it connects automatically. With multiple rooms, run `/huddora room` once; saving the project default requires confirmation.
 
-`/huddora connect` reruns the same idempotent onboarding transition used after reauth (bounded retry while connecting).
+`/huddora connect` re-runs onboarding and can re-stamp the server seat **only with the version of code currently loaded in this process**. After a plugin upgrade, connect alone is not enough if OMP still has the old module loaded — restart OMP first. Host `agent_list.extension_version` is whatever this process last sent on `agent_register`, not a web setting.
 
 ### Project configuration
 Only the current OMP working directory is considered: `<ctx.cwd>/.huddora/config.json`. The plugin never searches parent directories or home.
