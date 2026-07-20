@@ -120,6 +120,33 @@ describe("compatibility bridge credential boundary", () => {
 		fetchSpy.mockRestore();
 	});
 
+	test("surfaces tools/call isError text as ok:false message", async () => {
+		const root = await fixture();
+		await addRow(root, "default", Date.now() + 60_000);
+		const fetchSpy = spyOn(globalThis, "fetch");
+		fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }), { status: 200, headers: { "Mcp-Session-Id": "fixture-session" } }));
+		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 202 }));
+		fetchSpy.mockResolvedValueOnce(
+			new Response(
+				JSON.stringify({
+					jsonrpc: "2.0",
+					id: 2,
+					result: {
+						isError: true,
+						content: [{ type: "text", text: "agent_not_bound — call agent_register first" }],
+					},
+				}),
+				{ status: 200 },
+			),
+		);
+		const bridge = new UnsafeHuddoraBridge("default", { homeDir: root });
+		expect((await bridge.start(() => {})).ok).toBe(true);
+		const res = await bridge.callTool("agent_heartbeat", {});
+		expect(res.ok).toBe(false);
+		if (!res.ok) expect(res.message).toContain("agent_not_bound");
+		fetchSpy.mockRestore();
+	});
+
 	test("rereads once for each independent 401 request", async () => {
 		const root = await fixture();
 		await addRow(root, "default", Date.now() + 60_000);

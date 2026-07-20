@@ -9,6 +9,13 @@
  */
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import {
+	canAttemptRebind,
+	decideHeartbeatFailure,
+	isAgentUnboundError,
+	type RebindGate,
+} from "./agent-bind";
+
+import {
 	boundBatchForInject,
 	DEBOUNCE_MS,
 	defaultRateGuard,
@@ -76,6 +83,8 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 	let lastPushAt: number | null = null;
 	let bridge: UnsafeHuddoraBridge | null = null;
 	let heartbeatInFlight = false;
+	/** Single-flight + backoff for agent_register rebind (plugin-owned). */
+	let rebindGate: RebindGate = { inFlight: false, lastAttemptAt: 0, failStreak: 0 };
 	let onboardingTimer: TimerHandle | null = null;
 	let onboardingInFlight = false;
 	let onboardingAttempts = 0;
@@ -313,8 +322,9 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		nextCursor: number | null,
 	) {
 		if (!state.roomId || state.paused) return;
-		if (messages.length > 0) lastPushAt = Date.now();
-		pendingBatch.push(...messages);
+		// Live path: drop self-echo immediately (defense-in-depth vs server fanout).
+		// Still honor next_cursor so we do not re-fetch own sends.
+		const peers = filterOwnMessages(messages, state.selfUserId, state.selfAgentId);
 		if (nextCursor !== null) {
 			pendingNextCursor =
 				pendingNextCursor === null ? nextCursor : Math.max(pendingNextCursor, nextCursor);
@@ -324,6 +334,20 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 				pendingNextCursor = pendingNextCursor === null ? m : Math.max(pendingNextCursor, m);
 			}
 		}
+		if (peers.length === 0) {
+			// Advance durable cursor without injecting.
+			const advanced = advanceCursor(state, {
+				nextCursor: pendingNextCursor,
+				maxMessageCursor: maxCursor(messages),
+			});
+			if (advanced.cursor !== state.cursor) {
+				pendingNextCursor = null;
+				persist(advanced);
+			}
+			return;
+		}
+		lastPushAt = Date.now();
+		pendingBatch.push(...peers);
 		if (debounceTimer) ctx.clearTimer(debounceTimer);
 		debounceTimer = ctx.setTimeout(() => {
 			flushPending(ctx);
@@ -400,7 +424,9 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 			session_key: sessionKey,
 		});
 		if (!res.ok || !res.data || typeof res.data !== "object") {
-			persist(markError(state, res.ok === false ? res.message : "agent_register_failed"));
+			// Soft fail — do not leave "call agent_register first" as user-facing stuck state.
+			const msg = res.ok === false ? res.message : "agent_register_failed";
+			persist({ ...state, lastError: isAgentUnboundError(msg) ? "rebind pending" : msg.slice(0, 500) });
 			return false;
 		}
 		const id = Reflect.get(res.data, "agent_id");
@@ -413,38 +439,122 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 			agentDisplayName: typeof name === "string" ? name : state.agentDisplayName,
 			lastError: null,
 		});
+		rebindGate = { inFlight: false, lastAttemptAt: rebindGate.lastAttemptAt, failStreak: 0 };
 		return true;
 	}
+
+	/**
+	 * Plugin-owned rebind: register once (single-flight + backoff), re-arm room_watch.
+	 * Model never needs to call agent_register for normal recovery.
+	 */
+	async function rebindAgent(opts?: { force?: boolean }): Promise<boolean> {
+		if (shutdown || state.paused) return false;
+		const now = Date.now();
+		if (!opts?.force && !canAttemptRebind(rebindGate, now)) return false;
+		if (rebindGate.inFlight) return false;
+		rebindGate = { ...rebindGate, inFlight: true, lastAttemptAt: now };
+		try {
+			const ok = await callRegister();
+			if (!ok) {
+				rebindGate = {
+					inFlight: false,
+					lastAttemptAt: now,
+					failStreak: rebindGate.failStreak + 1,
+				};
+				return false;
+			}
+			rebindGate = { inFlight: false, lastAttemptAt: now, failStreak: 0 };
+			// Session identity changed — re-arm watch without notification storm.
+			if (state.roomId) await ensureWatch();
+			return true;
+		} catch {
+			rebindGate = {
+				inFlight: false,
+				lastAttemptAt: now,
+				failStreak: rebindGate.failStreak + 1,
+			};
+			return false;
+		}
+	}
+
 	/** Always re-register on start for hub rebind; session_key keeps the install seat. */
 	async function ensureAgentRegistered(): Promise<void> {
-		await callRegister();
+		await rebindAgent({ force: true });
 	}
+
+	/** After any bound call fails with agent_not_bound, rebind once and retry the call. */
+	async function withAgentBind<T>(
+		run: () => Promise<UnsafeBridgeResult<T>>,
+	): Promise<UnsafeBridgeResult<T>> {
+		const first = await run();
+		if (first.ok) return first;
+		if (!isAgentUnboundError(first.message)) return first;
+		if (!(await rebindAgent())) return first;
+		return run();
+	}
+
 	async function heartbeatTick() {
 		if (shutdown || state.paused || heartbeatInFlight) return;
 		heartbeatInFlight = true;
 		try {
 			const mode = delivery === "bridge" ? "mcp_push" : "poll";
 			if (!state.selfAgentId) {
-				if (await callRegister()) scheduleHeartbeat(liveCtx!);
+				if (await rebindAgent({ force: true })) {
+					if (liveCtx) scheduleHeartbeat(liveCtx);
+				}
 				return;
 			}
-			const res = await huddoraCall("agent_heartbeat", { extension_version: PLUGIN_VERSION, delivery_mode: mode });
-			if (res.ok) return;
-			const msg = res.message.toLowerCase();
-			if (msg.includes("revoked")) {
-				persist({ ...state, selfAgentId: null, agentDisplayName: null, lastError: "agent revoked — open /account/agents" });
-				clearTimer(liveCtx!);
+			const res = await huddoraCall("agent_heartbeat", {
+				extension_version: PLUGIN_VERSION,
+				delivery_mode: mode,
+			});
+			if (res.ok) {
+				// Clear soft rebind noise once presence is healthy.
+				if (state.lastError && /rebind|heartbeat|agent_not_bound|agent_register/i.test(state.lastError)) {
+					persist({ ...state, lastError: null });
+				}
 				return;
 			}
-			persist({ ...state, lastError: `heartbeat: ${res.message}` });
-			if (await callRegister()) {
-				const retry = await huddoraCall("agent_heartbeat", { extension_version: PLUGIN_VERSION, delivery_mode: mode });
-				if (!retry.ok) persist({ ...state, lastError: `heartbeat: ${retry.message}` });
+			const decision = decideHeartbeatFailure(res.message, rebindGate, Date.now());
+			if (decision.action === "stop_revoked") {
+				persist({
+					...state,
+					selfAgentId: null,
+					agentDisplayName: null,
+					lastError: "agent revoked — open /account/agents",
+				});
+				if (liveCtx) clearTimer(liveCtx);
+				return;
+			}
+			if (decision.action === "wait_backoff") return;
+			if (decision.action === "record_error") {
+				// Internal only — never leave "call agent_register first" as stuck user copy.
+				const soft = isAgentUnboundError(res.message)
+					? "presence rebind backoff"
+					: `heartbeat: ${res.message}`.slice(0, 500);
+				persist({ ...state, lastError: soft });
+				return;
+			}
+			// rebind
+			if (await rebindAgent()) {
+				const retry = await huddoraCall("agent_heartbeat", {
+					extension_version: PLUGIN_VERSION,
+					delivery_mode: mode,
+				});
+				if (!retry.ok) {
+					const soft = isAgentUnboundError(retry.message)
+						? "presence rebind pending"
+						: `heartbeat: ${retry.message}`.slice(0, 500);
+					persist({ ...state, lastError: soft });
+				} else if (state.lastError) {
+					persist({ ...state, lastError: null });
+				}
 			}
 		} finally {
 			heartbeatInFlight = false;
 		}
 	}
+
 	function scheduleHeartbeat(ctx: ExtensionContext) {
 		if (heartbeatTimer) {
 			ctx.clearTimer(heartbeatTimer);
@@ -458,10 +568,12 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 
 	async function ensureWatch(): Promise<void> {
 		if (!state.roomId || state.paused) return;
-		const res = await huddoraCall("room_watch", {
-			room_id: state.roomId,
-			after_cursor: state.cursor,
-		});
+		const res = await withAgentBind(() =>
+			huddoraCall("room_watch", {
+				room_id: state.roomId!,
+				after_cursor: state.cursor,
+			}),
+		);
 		if (!res.ok) {
 			delivery = "poll";
 			return;
@@ -572,8 +684,9 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 			);
 			return;
 		}
-		await ensureWatch();
+		// Register first so room_watch / heartbeat never hit agent_not_bound on a fresh session.
 		await ensureAgentRegistered();
+		await ensureWatch();
 		scheduleHeartbeat(ctx);
 		schedulePoll(ctx, 1_000);
 	}

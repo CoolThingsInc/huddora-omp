@@ -1,3 +1,5 @@
+import { mcpToolFailureMessage } from "./agent-bind";
+
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -90,6 +92,9 @@ export class UnsafeHuddoraBridge {
 		}
 		const call = await this.#request("tools/call", { name: toolName, arguments: args });
 		if (!call.ok) return call;
+		// tools/call returns isError payloads as HTTP 200 — surface the tool text.
+		const toolErr = mcpToolFailureMessage(call.data);
+		if (toolErr) return { ok: false, message: toolErr };
 		return { ok: true, data: call.data };
 	}
 

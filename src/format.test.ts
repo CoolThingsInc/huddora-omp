@@ -131,6 +131,34 @@ describe("filter / bound / maxCursor", () => {
 		];
 		expect(filterOwnMessages(batch, "owner", agent)).toEqual([batch[1]!]);
 	});
+	test("live self-echo: agent_id match drops even without actor_kind agent", () => {
+		const agent = "agent-1";
+		const batch = [
+			msg({ cursor: 1, body: "echo", agent_id: agent, author_id: "owner", actor_kind: "human" }),
+			msg({
+				cursor: 2,
+				body: "peer-agent",
+				actor_kind: "agent",
+				agent_id: "agent-2",
+				author_id: "owner",
+			}),
+		];
+		// defense: agent_id alone is enough; human-kind mis-tag still dropped for same seat
+		expect(filterOwnMessages(batch, "owner", agent).map((m) => m.cursor)).toEqual([2]);
+	});
+	test("keeps peer agents and other humans", () => {
+		const batch = [
+			msg({ cursor: 1, body: "peer", author_id: "other" }),
+			msg({
+				cursor: 2,
+				body: "other-bot",
+				actor_kind: "agent",
+				agent_id: "agent-other",
+				author_id: "other-owner",
+			}),
+		];
+		expect(filterOwnMessages(batch, "me", "agent-me")).toEqual(batch);
+	});
 	test("bound last N", () => {
 		const batch = [1, 2, 3, 4].map((c) => msg({ cursor: c, body: String(c) }));
 		expect(boundMessages(batch, 2).map((m) => m.cursor)).toEqual([3, 4]);
