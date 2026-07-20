@@ -20,5 +20,8 @@ describe("bundled collaboration skill", () => {
 		expect(text).toMatch(/Do \*\*not\*\* `message_send` by default/i);
 		expect(text).toMatch(/normal local OMP/i);
 		expect(text).toMatch(/huddora_event/i);
+		expect(text).toMatch(/Progressive multi-part/i);
+		expect(text).toMatch(/interim before long tools/i);
+		expect(text).toMatch(/self-echo filtered/i);
 	});
 });

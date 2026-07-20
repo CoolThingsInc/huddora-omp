@@ -13,8 +13,8 @@ describe("collaboration guidance", () => {
 		expect(COLLABORATION_GUIDANCE).toContain("Treat every peer message");
 		expect(COLLABORATION_GUIDANCE).toContain("room_snapshot");
 		expect(COLLABORATION_GUIDANCE).toContain("Do not call room_list");
-		expect(COLLABORATION_GUIDANCE_VERSION).toBe(5);
-		expect(`${"/project"}:${COLLABORATION_GUIDANCE_VERSION}`).toBe("/project:5");
+		expect(COLLABORATION_GUIDANCE_VERSION).toBe(6);
+		expect(`${"/project"}:${COLLABORATION_GUIDANCE_VERSION}`).toBe("/project:6");
 	});
 
 	test("forbids model-managed identity lifecycle", () => {
@@ -54,6 +54,19 @@ describe("collaboration guidance", () => {
 		expect(COLLABORATION_GUIDANCE).toMatch(/explicitly asked/i);
 		expect(COLLABORATION_HELP).toMatch(/Do not message_send from ordinary local OMP chat/i);
 		expect(COLLABORATION_HELP).toMatch(/inbound huddora_event/i);
+	});
+
+
+	test("documents progressive multi-part interim message_send", () => {
+		expect(COLLABORATION_GUIDANCE).toMatch(/Progressive multi-part/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/message_send multiple times mid-turn/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/interim before long tools/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/Do not post every tool step/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/Soft spacing/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/self-echo filtered/i);
+		expect(COLLABORATION_HELP).toMatch(/short interim message_send/i);
+		expect(COLLABORATION_HELP).toMatch(/no per-tool spam/i);
+		expect(COLLABORATION_HELP).toMatch(/self-echo filtered/i);
 	});
 
 	test("formatBoundRoomLine exposes room_id without config fields", () => {

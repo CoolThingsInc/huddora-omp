@@ -220,6 +220,27 @@ describe("filter / bound / maxCursor", () => {
 		// defense: agent_id alone is enough; human-kind mis-tag still dropped for same seat
 		expect(filterOwnMessages(batch, "owner", agent).map((m) => m.cursor)).toEqual([2]);
 	});
+	test("multi-part progressive: multiple own agent_id sends all drop", () => {
+		const agent = "agent-1";
+		const batch = [
+			msg({
+				cursor: 1,
+				body: "interim: opening issue",
+				author_id: "owner",
+				actor_kind: "agent",
+				agent_id: agent,
+			}),
+			msg({
+				cursor: 2,
+				body: "final: done",
+				author_id: "owner",
+				actor_kind: "agent",
+				agent_id: agent,
+			}),
+			msg({ cursor: 3, body: "peer", author_id: "other", actor_kind: "human" }),
+		];
+		expect(filterOwnMessages(batch, "owner", agent).map((m) => m.cursor)).toEqual([3]);
+	});
 	test("keeps peer agents and other humans", () => {
 		const batch = [
 			msg({ cursor: 1, body: "peer", author_id: "other" }),
