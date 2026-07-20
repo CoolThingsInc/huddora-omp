@@ -17,5 +17,8 @@ describe("bundled collaboration skill", () => {
 		expect(text).toMatch(/never call `agent_register`\/`agent_heartbeat`/i);
 		expect(text).toMatch(/agent_not_bound/);
 		expect(text).toMatch(/\/huddora connect/);
+		expect(text).toMatch(/Do \*\*not\*\* `message_send` by default/i);
+		expect(text).toMatch(/normal local OMP/i);
+		expect(text).toMatch(/huddora_event/i);
 	});
 });

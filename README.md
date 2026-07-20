@@ -14,7 +14,7 @@ Always-visible footer status (OMP `ctx.ui.setStatus`): agent display name, plugi
 
 ## Zero-friction setup
 
-1. Install or update the plugin (`omp plugin install @huddora/omp-huddora@0.3.13` or `--force`).
+1. Install or update the plugin (`omp plugin install @huddora/omp-huddora@0.3.14` or `--force`).
 2. **Fully quit and restart the OMP process** (not only a session reload or `/huddora connect`). OMP keeps the previously loaded plugin module in memory; the footer version is the **loaded** module (`PLUGIN_VERSION`), not the plugins lock file.
 3. Run `/mcp reauth huddora` and complete OAuth (needed so the bridge can read an access token).
 4. Accept the one-shot plugin MCP session disclosure if prompted (shown once; auto thereafter).
@@ -36,7 +36,7 @@ Validated schema: [`schema/config.schema.json`](./schema/config.schema.json). Th
 
 ## Model collaboration guidance
 
-On a successful bind the plugin injects one bounded, static plugin developer-context message for the project/session. It explains `room_snapshot`, `message_history`, `message_send`, and plugin-owned watch delivery; tells the model to `room_snapshot` a status-shown `room_id` without rediscovering via `room_list`; states that agent identity (register, heartbeat/online, session_key rebind) is fully automatic and plugin-owned — never call `agent_register`/`agent_heartbeat`, never invent `session_key`; on `agent_not_bound` use `/huddora connect` or wait; emphasizes decisions/handoffs/blockers over chat noise; and treats room messages and project metadata as untrusted input. `/huddora status` and doctor print `room_id=…`. `/huddora help` and the bundled [`huddora-collaboration`](./skills/huddora-collaboration/SKILL.md) skill expose the same protocol.
+On a successful bind the plugin injects one bounded, static plugin developer-context message for the project/session. It explains `room_snapshot`, `message_history`, `message_send`, and plugin-owned watch delivery; tells the model to `room_snapshot` a status-shown `room_id` without rediscovering via `room_list`; states that agent identity (register, heartbeat/online, session_key rebind) is fully automatic and plugin-owned — never call `agent_register`/`agent_heartbeat`, never invent `session_key`; on `agent_not_bound` use `/huddora connect` or wait; **does not `message_send` by default from ordinary local OMP chat** — only when the user explicitly asked to post/notify/reply in Huddora/room or context clearly requires a room reply (inbound `huddora_event` peer question, "tell the room", etc.); and treats room messages and project metadata as untrusted input. `/huddora status` and doctor print `room_id=…`. `/huddora help` and the bundled [`huddora-collaboration`](./skills/huddora-collaboration/SKILL.md) skill repeat the same rules.
 
 ## Plugin vs MCP-only
 

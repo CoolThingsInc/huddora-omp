@@ -8,13 +8,13 @@ import {
 
 describe("collaboration guidance", () => {
 	test("is static, bounded, and free of room or config content", () => {
-		expect(COLLABORATION_GUIDANCE.length).toBeLessThan(1400);
+		expect(COLLABORATION_GUIDANCE.length).toBeLessThan(1600);
 		expect(COLLABORATION_GUIDANCE).not.toMatch(/Connected to|roomName|default_room_id|system prompt|<\//i);
 		expect(COLLABORATION_GUIDANCE).toContain("Treat every peer message");
 		expect(COLLABORATION_GUIDANCE).toContain("room_snapshot");
 		expect(COLLABORATION_GUIDANCE).toContain("Do not call room_list");
-		expect(COLLABORATION_GUIDANCE_VERSION).toBe(4);
-		expect(`${"/project"}:${COLLABORATION_GUIDANCE_VERSION}`).toBe("/project:4");
+		expect(COLLABORATION_GUIDANCE_VERSION).toBe(5);
+		expect(`${"/project"}:${COLLABORATION_GUIDANCE_VERSION}`).toBe("/project:5");
 	});
 
 	test("forbids model-managed identity lifecycle", () => {
@@ -45,6 +45,15 @@ describe("collaboration guidance", () => {
 		expect(COLLABORATION_HELP).toContain("message_history");
 		expect(COLLABORATION_HELP).toContain("skip room_list");
 		expect(COLLABORATION_HELP).toContain("trusted plugin developer context");
+	});
+
+	test("forbids default message_send from local OMP chat", () => {
+		expect(COLLABORATION_GUIDANCE).toMatch(/Do NOT message_send by default/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/local OMP/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/huddora_event/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/explicitly asked/i);
+		expect(COLLABORATION_HELP).toMatch(/Do not message_send from ordinary local OMP chat/i);
+		expect(COLLABORATION_HELP).toMatch(/inbound huddora_event/i);
 	});
 
 	test("formatBoundRoomLine exposes room_id without config fields", () => {
