@@ -104,10 +104,10 @@ function labelAuthor(m: RoomMessage): string {
 }
 
 /**
- * Drop own echoes for live inject / poll.
- * Agent seat: drop by agent_id (any actor_kind if id matches).
- * Human: drop by author_id when not an agent message.
- * Live push of "I just sent this" must not interrupt the model.
+ * Drop true self-echo for live inject / poll.
+ * - Agent seat: drop only messages from this agent_id (never own agent send).
+ * - Unbound/human session: drop own human posts.
+ * - Bound agent seats MUST keep owner SPA/human posts (owner → agent event).
  */
 export function filterOwnMessages(
 	messages: RoomMessage[],
@@ -117,9 +117,12 @@ export function filterOwnMessages(
 	return messages.filter((m) => {
 		// Agent self-echo: strongest signal (same seat / session_key rebind).
 		if (selfAgentId && m.agent_id && m.agent_id === selfAgentId) return false;
-		// Human self (SPA or unbound send) — not agent peer traffic.
-		if (selfUserId && m.actor_kind !== "agent" && m.author_id === selfUserId) return false;
-		if (selfUserId && !m.actor_kind && m.author_id === selfUserId) return false;
+		// Unbound session only: drop human author matching selfUserId.
+		// Bound agents must still see owner human SPA posts as room events.
+		if (!selfAgentId && selfUserId && m.actor_kind !== "agent" && m.author_id === selfUserId) {
+			return false;
+		}
+		if (!selfAgentId && selfUserId && !m.actor_kind && m.author_id === selfUserId) return false;
 		return true;
 	});
 }

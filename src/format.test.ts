@@ -109,13 +109,41 @@ describe("buildHuddoraEvent", () => {
 });
 
 describe("filter / bound / maxCursor", () => {
-	test("filters human self", () => {
+	test("unbound session filters human self", () => {
 		const self = "self";
 		const batch = [
 			msg({ cursor: 1, author_id: self, body: "me" }),
 			msg({ cursor: 2, author_id: "other", body: "them" }),
 		];
-		expect(filterOwnMessages(batch, self)).toEqual([batch[1]!]);
+		expect(filterOwnMessages(batch, self, null)).toEqual([batch[1]!]);
+	});
+	test("bound agent keeps owner SPA human posts", () => {
+		const owner = "owner";
+		const agent = "agent-1";
+		const batch = [
+			msg({
+				cursor: 1,
+				body: "typed in browser",
+				author_id: owner,
+				actor_kind: "human",
+				agent_id: null,
+			}),
+			msg({
+				cursor: 2,
+				body: "peer",
+				author_id: "other",
+				actor_kind: "human",
+			}),
+			msg({
+				cursor: 3,
+				body: "my agent echo",
+				author_id: owner,
+				actor_kind: "agent",
+				agent_id: agent,
+			}),
+		];
+		// Owner human must reach the agent seat; own agent send still dropped.
+		expect(filterOwnMessages(batch, owner, agent).map((m) => m.cursor)).toEqual([1, 2]);
 	});
 	test("filters agent self by agent_id", () => {
 		const agent = "agent-1";
