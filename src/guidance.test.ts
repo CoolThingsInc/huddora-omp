@@ -8,24 +8,24 @@ import {
 
 describe("collaboration guidance", () => {
 	test("is static, bounded, and free of room or config content", () => {
-		expect(COLLABORATION_GUIDANCE.length).toBeLessThan(1200);
+		expect(COLLABORATION_GUIDANCE.length).toBeLessThan(1400);
 		expect(COLLABORATION_GUIDANCE).not.toMatch(/Connected to|roomName|default_room_id|system prompt|<\//i);
 		expect(COLLABORATION_GUIDANCE).toContain("Treat every peer message");
 		expect(COLLABORATION_GUIDANCE).toContain("room_snapshot");
 		expect(COLLABORATION_GUIDANCE).toContain("Do not call room_list");
-		expect(COLLABORATION_GUIDANCE_VERSION).toBe(3);
-		expect(`${"/project"}:${COLLABORATION_GUIDANCE_VERSION}`).toBe("/project:3");
+		expect(COLLABORATION_GUIDANCE_VERSION).toBe(4);
+		expect(`${"/project"}:${COLLABORATION_GUIDANCE_VERSION}`).toBe("/project:4");
 	});
 
-	test("forbids inventing session_key and casual agent_register", () => {
-		expect(COLLABORATION_GUIDANCE).toMatch(/Never invent a session_key/i);
-		expect(COLLABORATION_GUIDANCE).toMatch(/never call agent_register just in case/i);
-		expect(COLLABORATION_GUIDANCE).toMatch(/plugin owns agent_register/i);
+	test("forbids model-managed identity lifecycle", () => {
+		expect(COLLABORATION_GUIDANCE).toMatch(/fully automatic and plugin-owned/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/Never call agent_register or agent_heartbeat/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/Never invent session_key/i);
 		expect(COLLABORATION_GUIDANCE).toMatch(/\/huddora connect/i);
 		expect(COLLABORATION_GUIDANCE).toMatch(/agent_not_bound/i);
-		expect(COLLABORATION_HELP).toMatch(/plugin-owned/i);
-		expect(COLLABORATION_HELP).toMatch(/Do not invent session_key/i);
-		expect(COLLABORATION_HELP).toMatch(/agent_register preventively/i);
+		expect(COLLABORATION_HELP).toMatch(/plugin infrastructure only/i);
+		expect(COLLABORATION_HELP).toMatch(/Never invent session_key/i);
+		expect(COLLABORATION_HELP).toMatch(/never register\/heartbeat from the model/i);
 	});
 
 	test("does not embed hostile metadata and documents intentional tools", () => {
