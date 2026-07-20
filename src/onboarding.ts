@@ -42,9 +42,6 @@ export function doctorNextStep(input: {
 	) {
 		return "run /mcp reauth huddora (OAuth token missing/expired)";
 	}
-	if (/declined|disclosure/.test(err)) {
-		return "run /huddora connect (accept plugin MCP session)";
-	}
 	return "wait for auto-connect or run /huddora connect";
 }
 
@@ -64,7 +61,7 @@ export function roomToolFailureMessage(error: { kind: string; message: string })
 
 /**
  * Decide how autoConnect should bind a room for the current canonical root.
- * transportReady means the compatibility bridge is active (bridge-only plugin).
+ * transportReady means the plugin MCP session (bridge) is active.
  */
 export function decideRoomBinding(input: {
 	root: string;

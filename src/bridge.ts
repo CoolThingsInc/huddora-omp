@@ -14,16 +14,16 @@ type NotificationHandler = (method: string, params: unknown) => void;
 
 type JsonRpcResponse = { id?: number; result?: unknown; error?: { message?: string } };
 
-export type UnsafeBridgeStatus =
+export type BridgeStatus =
 	| "off"
 	| "ready"
 	| "expired"
 	| "missing_credential"
-	| "unsafe_db"
+	| "refused_db"
 	| "unsupported"
 	| "reauth_required";
 
-export type UnsafeBridgeResult<T> = { ok: true; data: T } | { ok: false; message: string };
+export type BridgeResult<T> = { ok: true; data: T } | { ok: false; message: string };
 
 type BridgeOptions = {
 	homeDir?: string;
@@ -32,7 +32,7 @@ type BridgeOptions = {
 	cancelSchedule?: (handle: unknown) => void;
 };
 
-export class UnsafeHuddoraBridge {
+export class HuddoraBridge {
 	#accessToken: string | null = null;
 	#expiresAt = 0;
 	#sessionId: string | null = null;
@@ -60,14 +60,14 @@ export class UnsafeHuddoraBridge {
 	#schedule: (handler: () => void, delayMs: number) => unknown;
 	#cancelSchedule: (handle: unknown) => void;
 
-	async status(): Promise<UnsafeBridgeStatus> {
+	async status(): Promise<BridgeStatus> {
 		if (this.#reauthRequired) return "reauth_required";
 		const token = await this.#readToken();
 		if (!token.ok) return token.status;
 		return token.value.expiresAt > this.#now() ? "ready" : "expired";
 	}
 
-	async start(onNotification: NotificationHandler): Promise<UnsafeBridgeResult<void>> {
+	async start(onNotification: NotificationHandler): Promise<BridgeResult<void>> {
 		this.#closed = false;
 		this.#sseAuthRecovered = false;
 		this.#onNotification = onNotification;
@@ -76,7 +76,7 @@ export class UnsafeHuddoraBridge {
 		const initialized = await this.#request("initialize", {
 			protocolVersion: "2025-03-26",
 			capabilities: {},
-			clientInfo: { name: "huddora-omp-compatibility-bridge", version: PLUGIN_VERSION },
+			clientInfo: { name: "huddora-omp-bridge", version: PLUGIN_VERSION },
 		});
 		if (!initialized.ok) return initialized;
 		await this.#notify("notifications/initialized", {});
@@ -85,7 +85,7 @@ export class UnsafeHuddoraBridge {
 		return { ok: true, data: undefined };
 	}
 
-	async callTool(toolName: string, args: Record<string, unknown>): Promise<UnsafeBridgeResult<unknown>> {
+	async callTool(toolName: string, args: Record<string, unknown>): Promise<BridgeResult<unknown>> {
 		if (!this.#sessionId) {
 			const started = await this.start(this.#onNotification ?? (() => {}));
 			if (!started.ok) return started;
@@ -121,10 +121,10 @@ export class UnsafeHuddoraBridge {
 		}
 	}
 
-	async #loadToken(): Promise<UnsafeBridgeResult<void>> {
+	async #loadToken(): Promise<BridgeResult<void>> {
 		const token = await this.#readToken();
-		if (!token.ok) return { ok: false, message: unsafeStatusMessage(token.status) };
-		if (token.value.expiresAt <= this.#now()) return { ok: false, message: unsafeStatusMessage("expired") };
+		if (!token.ok) return { ok: false, message: bridgeStatusMessage(token.status) };
+		if (token.value.expiresAt <= this.#now()) return { ok: false, message: bridgeStatusMessage("expired") };
 		this.#accessToken = token.value.access;
 		this.#expiresAt = token.value.expiresAt;
 		this.#reauthRequired = false;
@@ -136,10 +136,10 @@ export class UnsafeHuddoraBridge {
 		params: Record<string, unknown>,
 		reloaded = false,
 		skipSseRecoveryWait = false,
-	): Promise<UnsafeBridgeResult<unknown>> {
+	): Promise<BridgeResult<unknown>> {
 		if (this.#sseRecovery && !skipSseRecoveryWait) await this.#sseRecovery;
 		if (!this.#accessToken || this.#expiresAt <= this.#now()) {
-			if (reloaded) return { ok: false, message: unsafeStatusMessage("expired") };
+			if (reloaded) return { ok: false, message: bridgeStatusMessage("expired") };
 			this.#accessToken = null;
 			const loaded = await this.#loadToken();
 			return loaded.ok ? this.#request(method, params, true, skipSseRecoveryWait) : loaded;
@@ -161,14 +161,14 @@ export class UnsafeHuddoraBridge {
 			if (response.status === 401 || response.status === 403) {
 				this.#accessToken = null;
 				this.#reauthRequired = true;
-				return { ok: false, message: unsafeStatusMessage("reauth_required") };
+				return { ok: false, message: bridgeStatusMessage("reauth_required") };
 			}
-			if (!response.ok) return { ok: false, message: `Compatibility bridge HTTP ${response.status}` };
+			if (!response.ok) return { ok: false, message: `Huddora MCP session HTTP ${response.status}` };
 			const body = (await response.json()) as JsonRpcResponse;
-			if (body.error) return { ok: false, message: "Compatibility bridge MCP tool error" };
+			if (body.error) return { ok: false, message: "Huddora MCP session tool error" };
 			return { ok: true, data: unwrapToolResult(body.result) };
 		} catch {
-			return { ok: false, message: "Compatibility bridge transport error" };
+			return { ok: false, message: "Huddora MCP session transport error" };
 		}
 	}
 
@@ -277,7 +277,7 @@ export class UnsafeHuddoraBridge {
 			}
 			const initialized = await this.#request(
 				"initialize",
-				{ protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "huddora-omp-compatibility-bridge", version: PLUGIN_VERSION } },
+				{ protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "huddora-omp-bridge", version: PLUGIN_VERSION } },
 				true,
 				true,
 			);
@@ -299,7 +299,7 @@ export class UnsafeHuddoraBridge {
 		return headers;
 	}
 
-	async #readToken(): Promise<{ ok: true; value: Token } | { ok: false; status: UnsafeBridgeStatus }> {
+	async #readToken(): Promise<{ ok: true; value: Token } | { ok: false; status: BridgeStatus }> {
 		if (process.platform === "win32" || !PROFILE_NAME.test(this.profile)) return { ok: false, status: "unsupported" };
 		const root = path.join(this.#homeDir, ".omp");
 		const pathParts = this.profile === "default" ? [root, path.join(root, "agent")] : [root, path.join(root, "profiles"), path.join(root, "profiles", this.profile), path.join(root, "profiles", this.profile, "agent")];
@@ -308,15 +308,15 @@ export class UnsafeHuddoraBridge {
 			for (const segment of pathParts) {
 				const stat = await fs.lstat(segment);
 				if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o022) !== 0 || (typeof process.getuid === "function" && stat.uid !== process.getuid())) {
-					return { ok: false, status: "unsafe_db" };
+					return { ok: false, status: "refused_db" };
 				}
 			}
 			const db = await fs.lstat(dbPath);
 			if (!db.isFile() || db.isSymbolicLink() || (db.mode & 0o022) !== 0 || (typeof process.getuid === "function" && db.uid !== process.getuid())) {
-				return { ok: false, status: "unsafe_db" };
+				return { ok: false, status: "refused_db" };
 			}
 			const [realAgent, realDb] = await Promise.all([fs.realpath(pathParts.at(-1)!), fs.realpath(dbPath)]);
-			if (!realDb.startsWith(`${realAgent}${path.sep}`)) return { ok: false, status: "unsafe_db" };
+			if (!realDb.startsWith(`${realAgent}${path.sep}`)) return { ok: false, status: "refused_db" };
 			const dbHandle = new Database(realDb, { readonly: true });
 			try {
 				const columns = dbHandle.query("PRAGMA table_info(auth_credentials)").all();
@@ -367,19 +367,19 @@ function isTokenRow(value: unknown): value is { access: string; expires_ms: numb
 	return typeof value.access === "string" && value.access.length > 0 && typeof value.expires_ms === "number" && Number.isFinite(value.expires_ms);
 }
 
-export function unsafeStatusMessage(status: UnsafeBridgeStatus): string {
+export function bridgeStatusMessage(status: BridgeStatus): string {
 	switch (status) {
 		case "expired":
 		case "reauth_required":
-			return "Compatibility bridge needs fresh Huddora OAuth. Run /mcp reauth huddora.";
+			return "Huddora MCP session needs fresh OAuth. Run /mcp reauth huddora.";
 		case "missing_credential":
-			return "Compatibility bridge found no active Huddora OAuth credential for this profile.";
-		case "unsafe_db":
-			return "Compatibility bridge refused this profile database because its path or permissions are unsafe.";
+			return "No active Huddora OAuth credential for this profile. Run /mcp reauth huddora.";
+		case "refused_db":
+			return "Refused profile agent database: path or permissions are not safe.";
 		case "unsupported":
-			return "Compatibility bridge is unsupported for this runtime/profile path.";
+			return "Huddora MCP session unsupported for this runtime/profile path.";
 		default:
-			return "Compatibility bridge is off.";
+			return "Huddora MCP session is off.";
 	}
 }
 

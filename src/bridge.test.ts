@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { UnsafeHuddoraBridge } from "./unsafe-bridge";
+import { HuddoraBridge } from "./bridge";
 
 const roots: string[] = [];
 const URL = "https://huddora.coolthings.fyi/mcp";
@@ -37,11 +37,11 @@ afterEach(async () => {
 	await Promise.all(roots.splice(0).map(root => fs.rm(root, { recursive: true, force: true })));
 });
 
-describe("compatibility bridge credential boundary", () => {
+describe("plugin MCP session credential boundary", () => {
 	test("reads only a valid active-profile credential projection", async () => {
 		const root = await fixture("work");
 		await addRow(root, "work", Date.now() + 60_000);
-		const bridge = new UnsafeHuddoraBridge("work", { homeDir: root });
+		const bridge = new HuddoraBridge("work", { homeDir: root });
 		expect(await bridge.status()).toBe("ready");
 	});
 
@@ -50,18 +50,18 @@ describe("compatibility bridge credential boundary", () => {
 		await addRow(root, "work", Date.now() + 60_000);
 		const personal = await fixture("personal");
 		await addRow(personal, "personal", Date.now() + 60_000);
-		const bridge = new UnsafeHuddoraBridge("personal", { homeDir: root });
+		const bridge = new HuddoraBridge("personal", { homeDir: root });
 		expect(await bridge.status()).toBe("missing_credential");
 	});
 
 	test("fails closed for expiry, disabled rows, malformed credential JSON, and unsupported schema", async () => {
 		const expired = await fixture();
 		await addRow(expired, "default", Date.now() - 1);
-		expect(await new UnsafeHuddoraBridge("default", { homeDir: expired }).status()).toBe("expired");
+		expect(await new HuddoraBridge("default", { homeDir: expired }).status()).toBe("expired");
 
 		const disabled = await fixture();
 		await addRow(disabled, "default", Date.now() + 60_000, "disabled");
-		expect(await new UnsafeHuddoraBridge("default", { homeDir: disabled }).status()).toBe("missing_credential");
+		expect(await new HuddoraBridge("default", { homeDir: disabled }).status()).toBe("missing_credential");
 
 		const malformed = await fixture();
 		const db = new Database(path.join(malformed, ".omp", "agent", "agent.db"));
@@ -70,10 +70,10 @@ describe("compatibility bridge credential boundary", () => {
 			"not-json",
 		]);
 		db.close();
-		expect(await new UnsafeHuddoraBridge("default", { homeDir: malformed }).status()).toBe("missing_credential");
+		expect(await new HuddoraBridge("default", { homeDir: malformed }).status()).toBe("missing_credential");
 
 		const unsupported = await fixture("default", false);
-		expect(await new UnsafeHuddoraBridge("default", { homeDir: unsupported }).status()).toBe("unsupported");
+		expect(await new HuddoraBridge("default", { homeDir: unsupported }).status()).toBe("unsupported");
 	});
 
 	test("rereads once after 401 and never exposes the fixture token in errors", async () => {
@@ -91,7 +91,7 @@ describe("compatibility bridge credential boundary", () => {
 		fetchSpy.mockResolvedValueOnce(
 			new Response(JSON.stringify({ jsonrpc: "2.0", id: 3, result: { content: [] } }), { status: 200 }),
 		);
-		const bridge = new UnsafeHuddoraBridge("default", { homeDir: root });
+		const bridge = new HuddoraBridge("default", { homeDir: root });
 		const started = await bridge.start(() => {});
 		expect(started).toEqual({ ok: true, data: undefined });
 		const result = await bridge.callTool("room_list", {});
@@ -114,7 +114,7 @@ describe("compatibility bridge credential boundary", () => {
 		fetchSpy.mockResolvedValueOnce(
 			new Response(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: '{"rooms":[]}' }] } }), { status: 200 }),
 		);
-		const bridge = new UnsafeHuddoraBridge("default", { homeDir: root });
+		const bridge = new HuddoraBridge("default", { homeDir: root });
 		expect((await bridge.start(() => {})).ok).toBe(true);
 		expect(await bridge.callTool("room_list", {})).toEqual({ ok: true, data: { rooms: [] } });
 		fetchSpy.mockRestore();
@@ -139,7 +139,7 @@ describe("compatibility bridge credential boundary", () => {
 				{ status: 200 },
 			),
 		);
-		const bridge = new UnsafeHuddoraBridge("default", { homeDir: root });
+		const bridge = new HuddoraBridge("default", { homeDir: root });
 		expect((await bridge.start(() => {})).ok).toBe(true);
 		const res = await bridge.callTool("agent_heartbeat", {});
 		expect(res.ok).toBe(false);
@@ -157,7 +157,7 @@ describe("compatibility bridge credential boundary", () => {
 		fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ jsonrpc: "2.0", id: 2, result: {} }), { status: 200 }));
 		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 401 }));
 		fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ jsonrpc: "2.0", id: 3, result: {} }), { status: 200 }));
-		const bridge = new UnsafeHuddoraBridge("default", { homeDir: root });
+		const bridge = new HuddoraBridge("default", { homeDir: root });
 		expect((await bridge.start(() => {})).ok).toBe(true);
 		expect((await bridge.callTool("room_list", {})).ok).toBe(true);
 		expect((await bridge.callTool("room_list", {})).ok).toBe(true);
@@ -170,7 +170,7 @@ describe("compatibility bridge credential boundary", () => {
 		const fetchSpy = spyOn(globalThis, "fetch");
 		fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }), { status: 200, headers: { "Mcp-Session-Id": "fixture-session" } }));
 		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 202 }));
-		const bridge = new UnsafeHuddoraBridge("default", { homeDir: root });
+		const bridge = new HuddoraBridge("default", { homeDir: root });
 		expect((await bridge.start(() => {})).ok).toBe(true);
 		await new Promise(resolve => setTimeout(resolve, 60));
 		const db = new Database(path.join(root, ".omp", "agent", "agent.db"));
@@ -188,7 +188,7 @@ describe("compatibility bridge credential boundary", () => {
 		const fetchSpy = spyOn(globalThis, "fetch");
 		fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }), { status: 200, headers: { "Mcp-Session-Id": "fixture-session" } }));
 		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 202 }));
-		const bridge = new UnsafeHuddoraBridge("default", {
+		const bridge = new HuddoraBridge("default", {
 			homeDir: root,
 			schedule: run => {
 				scheduled.push(run as () => Promise<void>);
@@ -221,7 +221,7 @@ describe("compatibility bridge credential boundary", () => {
 		fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }), { status: 200, headers: { "Mcp-Session-Id": "fixture-session" } }));
 		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 202 }));
 		fetchSpy.mockResolvedValueOnce(new Response('data: {"method":"notifications/huddora/messages","params":{"room_id":"r"}}\n\n', { status: 200 }));
-		const bridge = new UnsafeHuddoraBridge("default", {
+		const bridge = new HuddoraBridge("default", {
 			homeDir: root,
 			schedule: run => {
 				scheduled.push(run as () => Promise<void>);
@@ -244,7 +244,7 @@ describe("compatibility bridge credential boundary", () => {
 		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 202 }));
 		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 503 }));
 		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 503 }));
-		const bridge = new UnsafeHuddoraBridge("default", {
+		const bridge = new HuddoraBridge("default", {
 			homeDir: root,
 			schedule: (run, delay) => {
 				const task = { run: run as () => Promise<void>, delay, cancelled: false };
@@ -281,7 +281,7 @@ describe("compatibility bridge credential boundary", () => {
 			}),
 		);
 		fetchSpy.mockResolvedValueOnce(new Response(null, { status: 202 }));
-		const bridge = new UnsafeHuddoraBridge("default", { homeDir: root });
+		const bridge = new HuddoraBridge("default", { homeDir: root });
 		expect((await bridge.start(() => {})).ok).toBe(true);
 		await bridge.close();
 		const close = fetchSpy.mock.calls.find(([, options]) => (options as RequestInit | undefined)?.method === "DELETE");
@@ -295,14 +295,14 @@ describe("compatibility bridge credential boundary", () => {
 		const target = path.join(symlinkRoot, "target.db");
 		await fs.rename(path.join(agent, "agent.db"), target);
 		await fs.symlink(target, path.join(agent, "agent.db"));
-		expect(await new UnsafeHuddoraBridge("default", { homeDir: symlinkRoot }).status()).toBe("unsafe_db");
+		expect(await new HuddoraBridge("default", { homeDir: symlinkRoot }).status()).toBe("refused_db");
 
 		const writableRoot = await fixture();
 		await fs.chmod(path.join(writableRoot, ".omp", "agent", "agent.db"), 0o622);
-		expect(await new UnsafeHuddoraBridge("default", { homeDir: writableRoot }).status()).toBe("unsafe_db");
+		expect(await new HuddoraBridge("default", { homeDir: writableRoot }).status()).toBe("refused_db");
 
 		const unsafeAncestor = await fixture();
 		await fs.chmod(path.join(unsafeAncestor, ".omp"), 0o722);
-		expect(await new UnsafeHuddoraBridge("default", { homeDir: unsafeAncestor }).status()).toBe("unsafe_db");
+		expect(await new HuddoraBridge("default", { homeDir: unsafeAncestor }).status()).toBe("refused_db");
 	});
 });

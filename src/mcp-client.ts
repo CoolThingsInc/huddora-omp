@@ -2,7 +2,7 @@
  * Huddora MCP access: bridge for plugin tools; optional host MCPManager for
  * process seat co-bind (agent_register on host connection) and doctor.
  *
- * Plugin tools use the compatibility bridge (own MCP session). Host
+ * Plugin tools use the plugin bridge (own MCP session). Host
  * MCPManager.instance() may be null in the extension process — host seat bind
  * is best-effort. Never scrape refresh tokens. Never log tokens.
  */
@@ -15,12 +15,12 @@ export type McpCallError = {
 
 export type McpResult<T> = { ok: true; data: T } | { ok: false; error: McpCallError };
 
-type CompatibilityCall = (toolName: string, args: Record<string, unknown>) => Promise<McpResult<unknown>>;
-let compatibilityCall: CompatibilityCall | null = null;
+type BridgeCall = (toolName: string, args: Record<string, unknown>) => Promise<McpResult<unknown>>;
+let bridgeCall: BridgeCall | null = null;
 
-/** Installs the extension-owned compatibility transport after lifecycle checks. */
-export function setCompatibilityBridge(call: CompatibilityCall | null): void {
-	compatibilityCall = call;
+/** Installs the extension-owned plugin MCP transport after lifecycle checks. */
+export function setPluginBridge(call: BridgeCall | null): void {
+	bridgeCall = call;
 }
 
 /** Test-only: clear bridge. Host seat is via MCPManager.instance(), not this hook. */
@@ -57,12 +57,12 @@ export async function callHuddoraTool(
 	args: Record<string, unknown> = {},
 	_signal?: AbortSignal,
 ): Promise<McpResult<unknown>> {
-	if (compatibilityCall) return compatibilityCall(toolName, args);
+	if (bridgeCall) return bridgeCall(toolName, args);
 	return {
 		ok: false,
 		error: {
 			kind: "no_host_api",
-			message: "Compatibility bridge not started.",
+			message: "Plugin MCP session not started.",
 		},
 	};
 }
@@ -74,7 +74,7 @@ export async function callHuddoraTool(
 export async function getHuddoraConnectionStatus(): Promise<
 	"bridge" | "bridge_missing" | "no_host_api"
 > {
-	if (compatibilityCall) return "bridge";
+	if (bridgeCall) return "bridge";
 	return "bridge_missing";
 }
 

@@ -4,7 +4,7 @@
  * Primary (architecture H): MCP SSE notifications/huddora/messages → sendMessage
  *   active: deliverAs steer; idle: nextTurn + triggerTurn
  * Notify: sole-consumer setOnNotification (default on); chain if getter exists
- * Safety: compatibility bridge only (profile access token) + poll recovery
+ * Transport: profile access-token MCP session + poll recovery
  * Auth: definition-only mcp.json + /mcp reauth (no token scrape)
  */
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
@@ -33,7 +33,7 @@ import {
 	callHuddoraTool,
 	getHuddoraConnectionStatus,
 	mcpRoomList,
-	setCompatibilityBridge,
+	setPluginBridge,
 } from "./mcp-client";
 import { parseHuddoraAgentNotification, parseHuddoraMessagesNotification } from "./notifications";
 import { advanceCursor, markError, nextPollDelayMs, restoreStateFromBranch } from "./state";
@@ -44,7 +44,7 @@ import {
 	STATUS_KEY,
 	type StatusTheme,
 } from "./status-surface";
-import { UnsafeHuddoraBridge, type UnsafeBridgeResult } from "./unsafe-bridge";
+import { HuddoraBridge, type BridgeResult } from "./bridge";
 import {
 	DEFAULT_PROJECT_CONFIG,
 	loadProjectConfig,
@@ -101,7 +101,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 	let liveCtx: ExtensionContext | null = null;
 	let rateGuard: RateGuardState = defaultRateGuard();
 	let lastPushAt: number | null = null;
-	let bridge: UnsafeHuddoraBridge | null = null;
+	let bridge: HuddoraBridge | null = null;
 	let heartbeatOk = false;
 	let heartbeatInFlight = false;
 	/** True while this process holds the agent seat (session_key co-own OK). */
@@ -264,7 +264,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 				injectGuidance(ctx, root);
 				return true;
 			}
-			// Bridge-only: ensure compatibility bridge before listing/binding rooms.
+			// Ensure bridge before listing/binding rooms.
 			if (!(await ensureTransport(ctx))) {
 				return false;
 			}
@@ -485,24 +485,9 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 
 
 	async function ensureBridge(ctx: ExtensionContext): Promise<boolean> {
-		// Bridge is always-on transport. One-shot disclosure; decline only blocks this attempt.
-		if (!state.bridgeDisclosureSeen && ctx.hasUI) {
-			const accepted = await ctx.ui.confirm(
-				"Huddora plugin MCP session",
-				"Huddora will read only the current Huddora access token and expiry from this profile's local agent database, open a direct Huddora MCP session for plugin tools, and never read refresh tokens or other credentials. Continue?",
-			);
-			if (!accepted) {
-				persist({
-					...state,
-					bridgeDisclosureSeen: true,
-					lastError: "plugin MCP session disclosure declined — run /huddora connect to retry",
-				});
-				return false;
-			}
-			persist({ ...state, bridgeDisclosureSeen: true, bridgeDisabled: false, lastError: null });
-		}
+		// Plugin transport is the bridge — only path. OAuth consent was /mcp reauth.
 		if (!bridge) {
-			bridge = new UnsafeHuddoraBridge();
+			bridge = new HuddoraBridge();
 			const started = await bridge.start((method, params) => {
 				const agentEvt = parseHuddoraAgentNotification(method, params);
 				if (agentEvt) {
@@ -529,22 +514,22 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 				persist(markError(state, started.message));
 				return false;
 			}
-			setCompatibilityBridge(async (toolName, args) => {
+			setPluginBridge(async (toolName, args) => {
 				const result = await bridge?.callTool(toolName, args);
 				if (result?.ok) return result;
-				return { ok: false, error: { kind: "no_host_api", message: result?.message ?? "Compatibility bridge unavailable." } };
+				return { ok: false, error: { kind: "no_host_api", message: result?.message ?? "Plugin MCP session unavailable." } };
 			});
 		}
 		delivery = "bridge";
 		return true;
 	}
 
-	/** Plugin tools always use the compatibility bridge. */
+	/** Plugin tools always use the bridge transport. */
 	async function ensureTransport(ctx: ExtensionContext): Promise<boolean> {
 		return ensureBridge(ctx);
 	}
 
-	async function huddoraCall(toolName: string, args: Record<string, unknown> = {}): Promise<UnsafeBridgeResult<unknown>> {
+	async function huddoraCall(toolName: string, args: Record<string, unknown> = {}): Promise<BridgeResult<unknown>> {
 		// Bridge-only tool path.
 		const result = await callHuddoraTool(toolName, args);
 		if (result.ok) return result;
@@ -649,8 +634,8 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 
 	/** After any bound call fails with agent_not_bound, rebind once and retry the call. */
 	async function withAgentBind<T>(
-		run: () => Promise<UnsafeBridgeResult<T>>,
-	): Promise<UnsafeBridgeResult<T>> {
+		run: () => Promise<BridgeResult<T>>,
+	): Promise<BridgeResult<T>> {
 		const first = await run();
 		if (first.ok) return first;
 		if (!isAgentUnboundError(first.message)) return first;
@@ -946,7 +931,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		if (bridge) {
 			await bridge.close();
 			bridge = null;
-			setCompatibilityBridge(null);
+			setPluginBridge(null);
 		}
 	});
 
@@ -1045,8 +1030,8 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 
 			switch (sub) {
 				case "connect": {
-					// Re-arm auto bridge + allow re-prompt after disclosure decline.
-					persist({ ...state, bridgeDisabled: false, bridgeDisclosureSeen: false, lastError: null });
+					// Re-arm auto onboarding.
+					persist({ ...state, bridgeDisabled: false, lastError: null });
 					scheduleOnboarding(ctx, true);
 					return;
 				}
@@ -1192,7 +1177,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 					if (state.roomId) await huddoraCall("room_unwatch", { room_id: state.roomId });
 					if (bridge) await bridge.close();
 					bridge = null;
-					setCompatibilityBridge(null);
+					setPluginBridge(null);
 					delivery = "unavailable";
 					heartbeatOk = false;
 					seatHeldExclusive = false;

@@ -26,7 +26,7 @@ export type EnsureSessionKeyResult = {
 	minted: boolean;
 };
 
-/** Active OMP/PI profile name (same source as compatibility bridge). */
+/** Active OMP/PI profile name (same source as plugin MCP session). */
 export function currentOmpProfile(): string {
 	const raw = (process.env.OMP_PROFILE ?? process.env.PI_PROFILE ?? "default").trim();
 	return PROFILE_RE.test(raw) ? raw : "default";

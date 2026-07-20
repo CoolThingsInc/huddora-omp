@@ -22,7 +22,7 @@ describe("isAgentUnboundError", () => {
 	});
 
 	test("ignores unrelated errors", () => {
-		expect(isAgentUnboundError("Compatibility bridge transport error")).toBe(false);
+		expect(isAgentUnboundError("Huddora MCP session transport error")).toBe(false);
 		expect(isAgentUnboundError("agent revoked")).toBe(false);
 		expect(isAgentUnboundError("")).toBe(false);
 	});
@@ -94,7 +94,7 @@ describe("decideHeartbeatFailure", () => {
 	});
 
 	test("generic session failure also rebinds (transport/session loss)", () => {
-		expect(decideHeartbeatFailure("Compatibility bridge MCP tool error", open, 1).action).toBe(
+		expect(decideHeartbeatFailure("Huddora MCP session tool error", open, 1).action).toBe(
 			"rebind",
 		);
 	});

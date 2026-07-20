@@ -52,20 +52,9 @@ describe("doctorNextStep auto-bridge", () => {
 				roomId: null,
 				connection: "bridge_missing",
 				delivery: "unknown",
-				bridgeError: "Compatibility bridge needs fresh Huddora OAuth",
+				bridgeError: "Huddora MCP session needs fresh OAuth",
 			}),
 		).toContain("reauth");
-	});
-
-	test("disclosure decline points at connect", () => {
-		expect(
-			doctorNextStep({
-				roomId: null,
-				connection: "bridge_missing",
-				delivery: "unknown",
-				bridgeError: "plugin MCP session disclosure declined",
-			}),
-		).toContain("connect");
 	});
 
 	test("roomToolFailureMessage no_host_api is not reauth-first", () => {
