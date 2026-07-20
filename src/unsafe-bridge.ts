@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { MCP_SERVER } from "./types";
+import { MCP_SERVER, PLUGIN_VERSION } from "./types";
 
 const HUDDORA_URL = "https://huddora.coolthings.fyi/mcp";
 const PROFILE_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
@@ -74,7 +74,7 @@ export class UnsafeHuddoraBridge {
 		const initialized = await this.#request("initialize", {
 			protocolVersion: "2025-03-26",
 			capabilities: {},
-			clientInfo: { name: "huddora-omp-compatibility-bridge", version: "0.3.2" },
+			clientInfo: { name: "huddora-omp-compatibility-bridge", version: PLUGIN_VERSION },
 		});
 		if (!initialized.ok) return initialized;
 		await this.#notify("notifications/initialized", {});
@@ -272,7 +272,7 @@ export class UnsafeHuddoraBridge {
 			}
 			const initialized = await this.#request(
 				"initialize",
-				{ protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "huddora-omp-compatibility-bridge", version: "0.2.0" } },
+				{ protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "huddora-omp-compatibility-bridge", version: PLUGIN_VERSION } },
 				true,
 				true,
 			);

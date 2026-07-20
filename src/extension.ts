@@ -34,6 +34,7 @@ import {
 	writeProjectConfig,
 } from "./project-config";
 import { bootstrapRoom, durablePayload, longPollWaitMs, pullAndFormat } from "./sync";
+import { ensureSessionKey } from "./session-key";
 import {
 	decideRoomBinding,
 	doctorNextStep,
@@ -386,6 +387,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 
 
 	async function callRegister(): Promise<boolean> {
+		const sessionKey = await ensureSessionKey({ fallback: state.sessionKey });
 		const res = await huddoraCall("agent_register", {
 			display_name: state.agentDisplayName
 				? state.agentDisplayName
@@ -395,6 +397,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 			harness: "omp",
 			extension_version: PLUGIN_VERSION,
 			delivery_mode: delivery === "bridge" ? "mcp_push" : "poll",
+			session_key: sessionKey,
 		});
 		if (!res.ok || !res.data || typeof res.data !== "object") {
 			persist(markError(state, res.ok === false ? res.message : "agent_register_failed"));
@@ -406,13 +409,14 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		persist({
 			...state,
 			selfAgentId: id,
+			sessionKey,
 			agentDisplayName: typeof name === "string" ? name : state.agentDisplayName,
 			lastError: null,
 		});
 		return true;
 	}
+	/** Always re-register on start for hub rebind; session_key keeps the install seat. */
 	async function ensureAgentRegistered(): Promise<void> {
-		if (state.selfAgentId) return;
 		await callRegister();
 	}
 	async function heartbeatTick() {
