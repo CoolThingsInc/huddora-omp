@@ -32,6 +32,12 @@ import {
 } from "./mcp-client";
 import { parseHuddoraMessagesNotification } from "./notifications";
 import { advanceCursor, markError, nextPollDelayMs, restoreStateFromBranch } from "./state";
+import {
+	derivePresence,
+	formatStatusLine,
+	formatStatusReport,
+	STATUS_KEY,
+} from "./status-surface";
 import { UnsafeHuddoraBridge, type UnsafeBridgeResult } from "./unsafe-bridge";
 import {
 	DEFAULT_PROJECT_CONFIG,
@@ -82,6 +88,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 	let rateGuard: RateGuardState = defaultRateGuard();
 	let lastPushAt: number | null = null;
 	let bridge: UnsafeHuddoraBridge | null = null;
+	let heartbeatOk = false;
 	let heartbeatInFlight = false;
 	/** Single-flight + backoff for agent_register rebind (plugin-owned). */
 	let rebindGate: RebindGate = { inFlight: false, lastAttemptAt: 0, failStreak: 0 };
@@ -90,13 +97,69 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 	let onboardingAttempts = 0;
 	let lastOnboardStatus: string | null = null;
 
+	function buildStatusInput(connection: string) {
+		const presence = derivePresence({
+			selfAgentId: state.selfAgentId,
+			lastError: state.lastError,
+			heartbeatOk,
+			bridgeReady: Boolean(bridge),
+		});
+		return {
+			pluginVersion: PLUGIN_VERSION,
+			agentDisplayName: state.agentDisplayName,
+			selfAgentId: state.selfAgentId,
+			roomId: state.roomId,
+			roomName: state.roomName,
+			presence,
+			delivery,
+			paused: state.paused,
+			bridgeActive: Boolean(bridge),
+			connection,
+			lastError: state.lastError,
+		};
+	}
+
+	/** Footer status bar (ctx.ui.setStatus) — always-visible chrome, not chat. */
+	function refreshStatusSurface(ctx?: ExtensionContext | null) {
+		const target = ctx ?? liveCtx;
+		if (!target?.hasUI) return;
+		const themed = (text: string) => {
+			try {
+				const theme = target.ui.theme;
+				const presence = derivePresence({
+					selfAgentId: state.selfAgentId,
+					lastError: state.lastError,
+					heartbeatOk,
+					bridgeReady: Boolean(bridge),
+				});
+				const color =
+					presence === "online"
+						? "success"
+						: presence === "revoked"
+							? "error"
+							: presence === "offline"
+								? "warning"
+								: "dim";
+				return theme.fg(color, text);
+			} catch {
+				return text;
+			}
+		};
+		// connection label is cheap/sync-ish via bridge presence; full getHuddoraConnectionStatus is async.
+		const connection = bridge ? "bridge" : "bridge_missing";
+		const line = formatStatusLine(buildStatusInput(connection));
+		target.ui.setStatus(STATUS_KEY, themed(line));
+	}
+
 	function persist(next: HuddoraPluginState) {
 		state = next;
 		pi.appendEntry(CUSTOM_STATE_TYPE, durablePayload(next));
+		refreshStatusSurface();
 	}
 
 	function restore(ctx: ExtensionContext) {
 		state = restoreStateFromBranch(ctx.sessionManager.getBranch());
+		refreshStatusSurface(ctx);
 	}
 
 	function injectGuidance(ctx: ExtensionContext, root: string) {
@@ -509,14 +572,19 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 				delivery_mode: mode,
 			});
 			if (res.ok) {
+				heartbeatOk = true;
 				// Clear soft rebind noise once presence is healthy.
 				if (state.lastError && /rebind|heartbeat|agent_not_bound|agent_register/i.test(state.lastError)) {
 					persist({ ...state, lastError: null });
+				} else {
+					refreshStatusSurface();
 				}
 				return;
 			}
+			heartbeatOk = false;
 			const decision = decideHeartbeatFailure(res.message, rebindGate, Date.now());
 			if (decision.action === "stop_revoked") {
+				heartbeatOk = false;
 				persist({
 					...state,
 					selfAgentId: null,
@@ -542,12 +610,18 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 					delivery_mode: mode,
 				});
 				if (!retry.ok) {
+					heartbeatOk = false;
 					const soft = isAgentUnboundError(retry.message)
 						? "presence rebind pending"
 						: `heartbeat: ${retry.message}`.slice(0, 500);
 					persist({ ...state, lastError: soft });
-				} else if (state.lastError) {
-					persist({ ...state, lastError: null });
+				} else {
+					heartbeatOk = true;
+					if (state.lastError) {
+						persist({ ...state, lastError: null });
+					} else {
+						refreshStatusSurface();
+					}
 				}
 			}
 		} finally {
@@ -663,25 +737,19 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 
 	async function statusText(): Promise<string> {
 		const conn = await getHuddoraConnectionStatus();
-		const bridgeStatus = bridge
-			? "active (auto)"
-			: "starting — needs OAuth token after /mcp reauth huddora";
-		const bound = formatBoundRoomLine(state.roomId, state.roomName);
-		return [
-			`Huddora: ${state.roomName ?? "no room"} · ${delivery} · ${state.paused ? "paused" : "active"}`,
-			`Plugin: ${conn}; agent: ${state.selfAgentId ? "registered" : "not registered"}; session: ${bridgeStatus}.`,
-			bound,
-			state.lastError ? `Next: ${state.lastError}` : state.roomId ? "Ready." : "Next: /huddora room",
-		]
-			.filter((line): line is string => Boolean(line))
-			.join("\n");
+		return formatStatusReport(buildStatusInput(conn));
 	}
 
 	async function startDelivery(ctx: ExtensionContext) {
 		liveCtx = ctx;
-		if (!state.roomId || state.paused) return;
+		if (!state.roomId || state.paused) {
+			refreshStatusSurface(ctx);
+			return;
+		}
 		if (!(await ensureBridge(ctx))) {
 			delivery = "unavailable";
+			heartbeatOk = false;
+			refreshStatusSurface(ctx);
 			ctx.ui.notify(
 				"Huddora: plugin MCP session unavailable. Run /mcp reauth huddora if OAuth expired, then /huddora connect.",
 				"error",
@@ -693,12 +761,14 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		await ensureWatch();
 		scheduleHeartbeat(ctx);
 		schedulePoll(ctx, 1_000);
+		refreshStatusSurface(ctx);
 	}
 
 	pi.on("session_start", async (_e, ctx) => {
 		shutdown = false;
 		liveCtx = ctx;
 		restore(ctx);
+		refreshStatusSurface(ctx);
 		scheduleOnboarding(ctx, true);
 	});
 
@@ -706,6 +776,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		liveCtx = ctx;
 		restore(ctx);
 		clearTimer(ctx);
+		refreshStatusSurface(ctx);
 		scheduleOnboarding(ctx, true);
 	});
 
@@ -715,6 +786,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		injectedCursors.clear();
 		rateGuard = defaultRateGuard();
 		clearTimer(ctx);
+		refreshStatusSurface(ctx);
 		scheduleOnboarding(ctx, true);
 	});
 
@@ -722,6 +794,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		liveCtx = ctx;
 		restore(ctx);
 		clearTimer(ctx);
+		refreshStatusSurface(ctx);
 		scheduleOnboarding(ctx, true);
 	});
 
@@ -730,6 +803,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		flushPending(ctx);
 		clearTimer(ctx);
 		inFlight = false;
+		if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, undefined);
 		liveCtx = null;
 		if (state.roomId) await huddoraCall("room_unwatch", { room_id: state.roomId });
 		if (bridge) {
@@ -738,6 +812,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 			setCompatibilityBridge(null);
 		}
 	});
+
 
 	pi.registerCommand("huddora", {
 		description: "Huddora: init|config|room|help|status|doctor|connect|push|pause|resume|sync|disconnect",
@@ -897,9 +972,11 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 					bridge = null;
 					setCompatibilityBridge(null);
 					delivery = "unavailable";
+					heartbeatOk = false;
 					persist(defaultState());
 					injectedCursors.clear();
 					rateGuard = defaultRateGuard();
+					refreshStatusSurface(ctx);
 					ctx.ui.notify("Disconnected.", "info");
 					return;
 				default:

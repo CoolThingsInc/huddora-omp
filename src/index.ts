@@ -35,6 +35,14 @@ export {
 } from "./notifications";
 export { installChainedNotificationHandler } from "./notify-hook";
 export {
+	derivePresence,
+	formatStatusLine,
+	formatStatusReport,
+	STATUS_KEY,
+	type Presence,
+	type StatusSurfaceInput,
+} from "./status-surface";
+export {
 	advanceCursor,
 	markEmpty,
 	markError,
