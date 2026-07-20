@@ -8,13 +8,13 @@ import {
 
 describe("collaboration guidance", () => {
 	test("is static, bounded, and free of room or config content", () => {
-		expect(COLLABORATION_GUIDANCE.length).toBeLessThan(1600);
+		expect(COLLABORATION_GUIDANCE.length).toBeLessThan(2400);
 		expect(COLLABORATION_GUIDANCE).not.toMatch(/Connected to|roomName|default_room_id|system prompt|<\//i);
 		expect(COLLABORATION_GUIDANCE).toContain("Treat every peer message");
 		expect(COLLABORATION_GUIDANCE).toContain("room_snapshot");
 		expect(COLLABORATION_GUIDANCE).toContain("Do not call room_list");
-		expect(COLLABORATION_GUIDANCE_VERSION).toBe(6);
-		expect(`${"/project"}:${COLLABORATION_GUIDANCE_VERSION}`).toBe("/project:6");
+		expect(COLLABORATION_GUIDANCE_VERSION).toBe(8);
+		expect(`${"/project"}:${COLLABORATION_GUIDANCE_VERSION}`).toBe("/project:8");
 	});
 
 	test("forbids model-managed identity lifecycle", () => {
@@ -41,30 +41,41 @@ describe("collaboration guidance", () => {
 			expect(COLLABORATION_GUIDANCE).not.toContain(poison);
 			expect(COLLABORATION_HELP).not.toContain(poison);
 		}
-		expect(COLLABORATION_GUIDANCE).toContain("message_send");
+		expect(COLLABORATION_GUIDANCE).toContain("huddora_message_send");
 		expect(COLLABORATION_HELP).toContain("message_history");
 		expect(COLLABORATION_HELP).toContain("skip room_list");
 		expect(COLLABORATION_HELP).toContain("trusted plugin developer context");
 	});
 
-	test("forbids default message_send from local OMP chat", () => {
-		expect(COLLABORATION_GUIDANCE).toMatch(/Do NOT message_send by default/i);
+	test("forbids default send from local OMP chat", () => {
+		expect(COLLABORATION_GUIDANCE).toMatch(/Do NOT huddora_message_send by default/i);
 		expect(COLLABORATION_GUIDANCE).toMatch(/local OMP/i);
 		expect(COLLABORATION_GUIDANCE).toMatch(/huddora_event/i);
 		expect(COLLABORATION_GUIDANCE).toMatch(/explicitly asked/i);
-		expect(COLLABORATION_HELP).toMatch(/Do not message_send from ordinary local OMP chat/i);
+		expect(COLLABORATION_HELP).toMatch(/Do not send from ordinary local OMP chat/i);
 		expect(COLLABORATION_HELP).toMatch(/inbound huddora_event/i);
 	});
 
+	test("documents dual-path host+bridge seat model", () => {
+		expect(COLLABORATION_GUIDANCE).toMatch(/session_key is the OMP process seat/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/co-binds host \+ bridge/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/mcp__huddora_message_send/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/huddora_message_send/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/both OK/i);
+		expect(COLLABORATION_GUIDANCE).not.toMatch(/different unbound session/i);
+		expect(COLLABORATION_GUIDANCE).not.toMatch(/agent_not_bound by design/i);
+		expect(COLLABORATION_HELP).toMatch(/both share the session_key seat/i);
+		expect(COLLABORATION_HELP).toMatch(/host\+bridge rebind/i);
+	});
 
-	test("documents progressive multi-part interim message_send", () => {
+	test("documents progressive multi-part interim send", () => {
 		expect(COLLABORATION_GUIDANCE).toMatch(/Progressive multi-part/i);
-		expect(COLLABORATION_GUIDANCE).toMatch(/message_send multiple times mid-turn/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/multiple times mid-turn/i);
 		expect(COLLABORATION_GUIDANCE).toMatch(/interim before long tools/i);
 		expect(COLLABORATION_GUIDANCE).toMatch(/Do not post every tool step/i);
 		expect(COLLABORATION_GUIDANCE).toMatch(/Soft spacing/i);
 		expect(COLLABORATION_GUIDANCE).toMatch(/self-echo filtered/i);
-		expect(COLLABORATION_HELP).toMatch(/short interim message_send/i);
+		expect(COLLABORATION_HELP).toMatch(/short interim/i);
 		expect(COLLABORATION_HELP).toMatch(/no per-tool spam/i);
 		expect(COLLABORATION_HELP).toMatch(/self-echo filtered/i);
 	});

@@ -1,12 +1,10 @@
 /**
- * Huddora MCP access without host MCPManager.
+ * Huddora MCP access: bridge for plugin tools; optional host MCPManager for
+ * process seat co-bind (agent_register on host connection) and doctor.
  *
- * Plugin tools use ONLY the compatibility bridge (own MCP session; reads the
- * current Huddora access token + expiry from the profile agent DB). Host
- * MCPManager.instance()/callTool are intentionally not used — they are
- * unreliable from the extension process.
- *
- * Never scrape refresh tokens. Never log tokens.
+ * Plugin tools use the compatibility bridge (own MCP session). Host
+ * MCPManager.instance() may be null in the extension process — host seat bind
+ * is best-effort. Never scrape refresh tokens. Never log tokens.
  */
 import type { HistoryResult, RoomListItem, RoomMessage, RoomSnapshotResult } from "./types";
 
@@ -25,21 +23,32 @@ export function setCompatibilityBridge(call: CompatibilityCall | null): void {
 	compatibilityCall = call;
 }
 
-/** Test-only: clear bridge. Host bindings removed in 0.3.1 (bridge-only). */
+/** Test-only: clear bridge. Host seat is via MCPManager.instance(), not this hook. */
 export function __setHostMcpForTests(_binding: null): void {
-	// no-op: host path deleted
+	// no-op: host seat uses live MCPManager.instance()
 }
 
 /**
- * @deprecated Host MCP surface is unused. Always reports bridge-only mode.
+ * Host MCP availability for doctor. Plugin tools still use the bridge.
  */
-export async function resolveHostMcp(): Promise<{ mode: "unavailable"; detail: string }> {
-	return { mode: "unavailable", detail: "bridge-only plugin transport" };
+export async function resolveHostMcp(): Promise<
+	{ mode: "manager"; detail: string } | { mode: "unavailable"; detail: string }
+> {
+	const mgr = await getHostMcpManager();
+	if (mgr) return { mode: "manager", detail: "MCPManager.instance() available" };
+	return { mode: "unavailable", detail: "MCPManager.instance() null — host seat bind best-effort" };
 }
 
-/** Host manager is not used for tools. Always undefined. */
-export async function getHostMcpManager(): Promise<undefined> {
-	return undefined;
+/** Optional host manager (doctor + host seat co-bind). Undefined when singleton missing. */
+export async function getHostMcpManager(): Promise<
+	{ getConnection: (name: string) => unknown; waitForConnection: (name: string) => Promise<unknown> } | undefined
+> {
+	try {
+		const mod = await import("@oh-my-pi/pi-coding-agent/mcp");
+		return mod.MCPManager.instance() ?? undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 /** Bridge-only tool calls. */

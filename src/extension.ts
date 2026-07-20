@@ -53,6 +53,8 @@ import {
 	writeProjectConfig,
 } from "./project-config";
 import { bootstrapRoom, durablePayload, longPollWaitMs, pullAndFormat } from "./sync";
+import { buildMessageSendArgs, formatMessageSendToolResult } from "./send-tool";
+import { bindHostAgentSeat } from "./host-seat";
 import { ensureSessionKey } from "./session-key";
 import {
 	decideRoomBinding,
@@ -96,8 +98,10 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 	let bridge: UnsafeHuddoraBridge | null = null;
 	let heartbeatOk = false;
 	let heartbeatInFlight = false;
-	/** True while this process holds the exclusive agent seat (1 seat ↔ 1 session). */
+	/** True while this process holds the agent seat (session_key co-own OK). */
 	let seatHeldExclusive = false;
+	/** Host MCP agent_register succeeded for this process seat (best-effort). */
+	let hostSeatBound = false;
 	/** Single-flight + backoff for agent_register rebind (plugin-owned). */
 	let rebindGate: RebindGate = { inFlight: false, lastAttemptAt: 0, failStreak: 0 };
 	let onboardingTimer: TimerHandle | null = null;
@@ -302,6 +306,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 	function handleSeatPreempted(agentId?: string | null) {
 		if (agentId && state.selfAgentId && agentId !== state.selfAgentId) return;
 		seatHeldExclusive = false;
+		hostSeatBound = false;
 		heartbeatOk = false;
 		if (liveCtx) clearTimer(liveCtx);
 		const next = applySeatPreempted(state, agentId);
@@ -504,17 +509,16 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		// Branch state sessionKey is the seat for this OMP process/conversation.
 		// Multi-OMP windows mint distinct keys → multiple agents for one human.
 		const sessionKey = await ensureSessionKey({ fallback: state.sessionKey });
-		const res = await huddoraCall(
-			"agent_register",
-			buildAgentRegisterArgs({
-				selfAgentId: state.selfAgentId,
-				agentDisplayName: state.agentDisplayName,
-				selfDisplayName: state.selfDisplayName,
-				pluginVersion: PLUGIN_VERSION,
-				deliveryMode: delivery === "bridge" ? "mcp_push" : "poll",
-				sessionKey,
-			}),
-		);
+		const registerArgs = buildAgentRegisterArgs({
+			selfAgentId: state.selfAgentId,
+			agentDisplayName: state.agentDisplayName,
+			selfDisplayName: state.selfDisplayName,
+			pluginVersion: PLUGIN_VERSION,
+			// Same delivery_mode for host rebind so we do not stomp mcp_push → none.
+			deliveryMode: delivery === "bridge" ? "mcp_push" : "poll",
+			sessionKey,
+		});
+		const res = await huddoraCall("agent_register", registerArgs);
 		if (!res.ok || !res.data || typeof res.data !== "object") {
 			// Soft fail — do not leave "call agent_register first" as user-facing stuck state.
 			const msg = res.ok === false ? res.message : "agent_register_failed";
@@ -533,6 +537,8 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 			lastError: null,
 		});
 		seatHeldExclusive = true;
+		// Co-bind host MCP connection with the same session_key (best-effort; no room_watch).
+		hostSeatBound = await bindHostAgentSeat(registerArgs);
 		heartbeatOk = false; // next heartbeatTick flips online
 		rebindGate = { inFlight: false, lastAttemptAt: rebindGate.lastAttemptAt, failStreak: 0 };
 		return true;
@@ -612,6 +618,18 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 			if (res.ok) {
 				heartbeatOk = true;
 				seatHeldExclusive = true;
+				// Optional host co-bind if earlier register missed MCPManager singleton.
+				if (!hostSeatBound && state.sessionKey) {
+					const args = buildAgentRegisterArgs({
+						selfAgentId: state.selfAgentId,
+						agentDisplayName: state.agentDisplayName,
+						selfDisplayName: state.selfDisplayName,
+						pluginVersion: PLUGIN_VERSION,
+						deliveryMode: mode,
+						sessionKey: state.sessionKey,
+					});
+					hostSeatBound = await bindHostAgentSeat(args);
+				}
 				// Clear soft rebind noise once presence is healthy.
 				if (state.lastError && /rebind|heartbeat|agent_not_bound|agent_register|seat taken/i.test(state.lastError)) {
 					persist({ ...state, lastError: null });
@@ -624,6 +642,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 			const decision = decideHeartbeatFailure(res.message, rebindGate, Date.now());
 			if (decision.action === "stop_revoked") {
 				seatHeldExclusive = false;
+				hostSeatBound = false;
 				persist({
 					...state,
 					selfAgentId: null,
@@ -866,6 +885,78 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 	});
 
 
+
+	const { z } = pi.zod;
+	// Cast: pi.zod + ToolDefinition generics can exceed TS instantiation depth.
+	pi.registerTool({
+		name: "huddora_message_send",
+		label: "Huddora message send",
+		description:
+			"Send a room message via the plugin-bound bridge session (the same seat as footer online). Prefer this over host mcp__huddora_message_send / message_send — host MCP is a different unbound session and returns agent_not_bound by design when the plugin holds the seat. Do not use by default for local OMP chat; only when the user asked to post/notify/reply in the room or context clearly requires a room reply (inbound huddora_event, tell the room, etc.).",
+		loadMode: "essential",
+		approval: "write",
+		parameters: z.object({
+			room_id: z.string().describe("UUID of the room"),
+			body: z.string().describe("Message text, 1–8000 characters"),
+			client_message_id: z
+				.string()
+				.optional()
+				.describe("Idempotency key 1–128; stable across retries. Generated if omitted."),
+			reply_to: z.string().optional().describe("Parent message UUID in the same room"),
+		}),
+		async execute(
+			_toolCallId: string,
+			params: {
+				room_id: string;
+				body: string;
+				client_message_id?: string;
+				reply_to?: string;
+			},
+			_signal: AbortSignal | undefined,
+			_onUpdate: unknown,
+			ctx: ExtensionContext | undefined,
+		) {
+			const body = typeof params.body === "string" ? params.body : "";
+			if (body.length < 1 || body.length > 8000) {
+				return formatMessageSendToolResult({
+					ok: false,
+					message: "body must be 1–8000 characters",
+				});
+			}
+			const roomId = typeof params.room_id === "string" ? params.room_id : "";
+			if (!/^[0-9a-fA-F-]{36}$/.test(roomId)) {
+				return formatMessageSendToolResult({
+					ok: false,
+					message: "room_id must be a UUID",
+				});
+			}
+			const target = ctx ?? liveCtx;
+			if (!target) {
+				return formatMessageSendToolResult({
+					ok: false,
+					message: "No active OMP session context for Huddora send.",
+				});
+			}
+			if (!(await ensureBridge(target))) {
+				return formatMessageSendToolResult({
+					ok: false,
+					message:
+						"Huddora plugin MCP session unavailable. Run /mcp reauth huddora if needed, then /huddora connect.",
+				});
+			}
+			const args = buildMessageSendArgs({
+				room_id: roomId,
+				body,
+				client_message_id: params.client_message_id,
+				reply_to: params.reply_to,
+			});
+			const res = await withAgentBind(() => huddoraCall("message_send", args));
+			if (!res.ok) {
+				return formatMessageSendToolResult({ ok: false, message: res.message });
+			}
+			return formatMessageSendToolResult({ ok: true, data: res.data });
+		},
+	} as Parameters<ExtensionAPI["registerTool"]>[0]);
 	pi.registerCommand("huddora", {
 		description: "Huddora: init|config|room|help|status|doctor|connect|push|pause|resume|sync|disconnect",
 		handler: async (args, ctx) => {

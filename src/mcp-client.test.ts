@@ -8,7 +8,7 @@ import {
 	setCompatibilityBridge,
 } from "./mcp-client";
 
-describe("bridge-only MCP client", () => {
+describe("bridge tool path + optional host manager", () => {
 	beforeEach(() => {
 		__setHostMcpForTests(null);
 		setCompatibilityBridge(null);
@@ -16,11 +16,17 @@ describe("bridge-only MCP client", () => {
 
 	test("without bridge, tools fail with bridge-not-started", async () => {
 		expect(await getHuddoraConnectionStatus()).toBe("bridge_missing");
-		expect(await getHostMcpManager()).toBeUndefined();
-		expect(await resolveHostMcp()).toEqual({
-			mode: "unavailable",
-			detail: "bridge-only plugin transport",
-		});
+		// In unit tests MCPManager.instance() is typically null.
+		const mgr = await getHostMcpManager();
+		const host = await resolveHostMcp();
+		if (mgr) {
+			expect(host.mode).toBe("manager");
+		} else {
+			expect(host).toEqual({
+				mode: "unavailable",
+				detail: "MCPManager.instance() null — host seat bind best-effort",
+			});
+		}
 		const before = await callHuddoraTool("room_list");
 		expect(before).toEqual({
 			ok: false,
@@ -28,7 +34,7 @@ describe("bridge-only MCP client", () => {
 		});
 	});
 
-	test("installed bridge is the only tool path", async () => {
+	test("installed bridge is the tool path for plugin calls", async () => {
 		let bridgeCalls = 0;
 		setCompatibilityBridge(async (toolName, args) => {
 			bridgeCalls++;
