@@ -24,6 +24,8 @@ export type StatusSurfaceInput = {
 	bridgeActive: boolean;
 	connection: string;
 	lastError: string | null;
+	/** True when this process exclusively holds the agent seat and is online. */
+	seatExclusive?: boolean;
 };
 
 /** Minimal theme surface used for segmented footer coloring. */
@@ -131,6 +133,14 @@ export function formatStatusReport(input: StatusSurfaceInput): string {
 		stamped === input.pluginVersion
 			? `Loaded plugin v${input.pluginVersion} (this process). Seat stamp matches.`
 			: `Loaded plugin v${input.pluginVersion} (this process). Last seat stamp: ${stamped}. Host agent_list extension_version updates only after this process agent_register — not from the web UI. After plugin upgrade: full OMP restart, then /huddora connect.`;
+	const exclusive =
+		input.presence === "online" && input.seatExclusive
+			? "Seat: exclusive (this process holds the live session)."
+			: input.lastError && /seat taken|preempt/i.test(input.lastError)
+				? "Seat: not held — another session owns this agent; /huddora connect to reclaim."
+				: input.selfAgentId
+					? "Seat: not exclusive online (rebind/heartbeat pending or offline)."
+					: "Seat: not registered.";
 	const next = input.lastError
 		? `Next: ${input.lastError}`
 		: input.roomId
@@ -141,6 +151,7 @@ export function formatStatusReport(input: StatusSurfaceInput): string {
 		`${I.brand} Huddora ${input.pluginVersion}  ${p.icon} ${p.label}${pause}`,
 		versionNote,
 		`${I.agent} Agent: ${agent}${input.selfAgentId ? " (registered)" : " (not registered)"}`,
+		exclusive,
 		`${I.room} Room: ${room}`,
 		roomIdLine,
 		`Plugin: ${input.connection}; delivery: ${input.delivery}; session: ${session}.`,

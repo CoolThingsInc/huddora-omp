@@ -15,6 +15,17 @@ export type HuddoraAgentRenamedNotification = {
 	displayName: string;
 };
 
+export type HuddoraAgentPreemptedNotification = {
+	type: "agent_preempted";
+	agentId: string;
+	reason: "bound_elsewhere";
+	bySessionId: string | null;
+};
+
+export type HuddoraAgentNotification =
+	| HuddoraAgentRenamedNotification
+	| HuddoraAgentPreemptedNotification;
+
 /** Parse custom MCP notification; ignore unknown methods. */
 export function parseHuddoraMessagesNotification(
 	method: string,
@@ -36,7 +47,7 @@ export function parseHuddoraMessagesNotification(
 			continue;
 		}
 		const actorKind = stringField(raw, "actor_kind");
-		parsed.push({
+		const msg: RoomMessage = {
 			message_id: stringField(raw, "message_id") ?? `c-${cursor}`,
 			room_id: stringField(raw, "room_id") ?? roomId,
 			cursor,
@@ -50,7 +61,12 @@ export function parseHuddoraMessagesNotification(
 			agent_name: stringField(raw, "agent_name"),
 			owner_id: stringField(raw, "owner_id") ?? authorId,
 			owner_name: stringField(raw, "owner_name"),
-		});
+		};
+		const replyTo = parseReplyTo(raw);
+		if (replyTo !== undefined) msg.reply_to = replyTo;
+		const mentions = parseMentions(raw);
+		if (mentions !== undefined) msg.mentions = mentions;
+		parsed.push(msg);
 	}
 	return {
 		roomId,
@@ -59,26 +75,85 @@ export function parseHuddoraMessagesNotification(
 	};
 }
 
-/** Parse agent lifecycle push; only agent_renamed for now. */
+/** Parse agent lifecycle push: rename + preempt. */
 export function parseHuddoraAgentNotification(
 	method: string,
 	params: unknown,
-): HuddoraAgentRenamedNotification | null {
+): HuddoraAgentNotification | null {
 	if (method !== HUDDORA_AGENT_METHOD) return null;
 	if (!params || typeof params !== "object") return null;
 	const type = Reflect.get(params, "type");
-	if (type !== "agent_renamed") return null;
 	const agentId = Reflect.get(params, "agent_id");
-	const displayName = Reflect.get(params, "display_name");
 	if (typeof agentId !== "string" || !agentId.trim()) return null;
-	if (typeof displayName !== "string" || !displayName.trim()) return null;
+
+	if (type === "agent_renamed") {
+		const displayName = Reflect.get(params, "display_name");
+		if (typeof displayName !== "string" || !displayName.trim()) return null;
+		return {
+			type: "agent_renamed",
+			agentId: agentId.trim(),
+			displayName: displayName.trim(),
+		};
+	}
+
+	if (type === "agent_preempted") {
+		const reason = Reflect.get(params, "reason");
+		const by = Reflect.get(params, "by_session_id");
+		return {
+			type: "agent_preempted",
+			agentId: agentId.trim(),
+			reason: reason === "bound_elsewhere" ? "bound_elsewhere" : "bound_elsewhere",
+			bySessionId: typeof by === "string" && by.trim() ? by.trim() : null,
+		};
+	}
+
+	return null;
+}
+
+
+function parseReplyTo(raw: object): RoomMessage["reply_to"] | undefined {
+	if (!Object.prototype.hasOwnProperty.call(raw, "reply_to")) return undefined;
+	const rt = Reflect.get(raw, "reply_to");
+	if (rt == null) return null;
+	if (typeof rt !== "object") return null;
+	const message_id = Reflect.get(rt, "message_id");
+	const cursor = Reflect.get(rt, "cursor");
+	if (
+		typeof message_id !== "string" ||
+		!message_id ||
+		typeof cursor !== "number" ||
+		!Number.isFinite(cursor)
+	) {
+		return null;
+	}
+	const author_name = Reflect.get(rt, "author_name");
+	const snippet = Reflect.get(rt, "snippet");
 	return {
-		type: "agent_renamed",
-		agentId: agentId.trim(),
-		displayName: displayName.trim(),
+		message_id,
+		cursor,
+		author_name: typeof author_name === "string" ? author_name : "",
+		snippet: typeof snippet === "string" ? snippet.slice(0, 80) : "",
 	};
 }
 
+function parseMentions(
+	raw: object,
+): Array<{ kind: "human" | "agent"; id: string; name: string }> | undefined {
+	if (!Object.prototype.hasOwnProperty.call(raw, "mentions")) return undefined;
+	const list = Reflect.get(raw, "mentions");
+	if (!Array.isArray(list)) return [];
+	const out: Array<{ kind: "human" | "agent"; id: string; name: string }> = [];
+	for (const item of list) {
+		if (!item || typeof item !== "object") continue;
+		const kind = Reflect.get(item, "kind");
+		const id = Reflect.get(item, "id");
+		const name = Reflect.get(item, "name");
+		if ((kind !== "human" && kind !== "agent") || typeof id !== "string" || !id) continue;
+		if (typeof name !== "string") continue;
+		out.push({ kind, id, name });
+	}
+	return out;
+}
 function stringField(raw: object, key: string): string | null {
 	const v = Reflect.get(raw, key);
 	return typeof v === "string" ? v : null;

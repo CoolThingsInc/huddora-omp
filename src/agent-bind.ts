@@ -1,10 +1,14 @@
 /**
  * Agent presence rebind policy — pure helpers for plugin-owned auto-register.
  * Extension owns IO; this module decides when to rebind vs surface errors.
+ *
+ * Invariant (server + plugin): 1 agent seat ↔ 1 live MCP/plugin session.
+ * New bind preempts the previous live session.
  */
 
 /** Server / tool text that means this MCP session has no agent bound. */
 export function isAgentUnboundError(message: string): boolean {
+	if (isAgentPreemptedError(message)) return false;
 	const m = message.toLowerCase();
 	return (
 		m.includes("agent_not_bound") ||
@@ -16,6 +20,12 @@ export function isAgentUnboundError(message: string): boolean {
 
 export function isAgentRevokedError(message: string): boolean {
 	return message.toLowerCase().includes("revoked");
+}
+
+/** Seat taken by another live session — do not auto-steal without explicit connect. */
+export function isAgentPreemptedError(message: string): boolean {
+	const m = message.toLowerCase();
+	return m.includes("agent_preempted") || m.includes("bound_elsewhere") || m.includes("preempted");
 }
 
 export type RebindGate = {
@@ -39,13 +49,15 @@ export function canAttemptRebind(
 
 export type HeartbeatFailureAction =
 	| { action: "stop_revoked" }
+	| { action: "stop_preempted" }
 	| { action: "rebind" }
 	| { action: "wait_backoff" }
 	| { action: "record_error" };
 
 /**
- * After a failed heartbeat: revoke stops work; unbound/session loss rebinds
+ * After a failed heartbeat: revoke/preempt stop work; unbound/session loss rebinds
  * when the gate allows; otherwise wait or record soft error.
+ * Preempted seats must not auto-steal (avoids two processes thrashing the seat).
  */
 export function decideHeartbeatFailure(
 	message: string,
@@ -53,6 +65,7 @@ export function decideHeartbeatFailure(
 	now: number,
 ): HeartbeatFailureAction {
 	if (isAgentRevokedError(message)) return { action: "stop_revoked" };
+	if (isAgentPreemptedError(message)) return { action: "stop_preempted" };
 	// Any non-revoked failure may mean session lost identity — rebind once.
 	if (canAttemptRebind(gate, now)) return { action: "rebind" };
 	if (gate.inFlight) return { action: "wait_backoff" };
@@ -117,4 +130,23 @@ export function buildAgentRegisterArgs(input: {
 				: "OMP agent";
 	}
 	return args;
+}
+
+/** User-facing copy when this process lost the exclusive seat. */
+export const PREEMPTED_STATUS_MESSAGE =
+	"seat taken by another session — this process is offline. Run /huddora connect to reclaim.";
+
+/**
+ * Pure transition when server notifies agent_preempted or a tool says seat is elsewhere.
+ * Keeps roomId/sessionKey for recovery; clears online signals.
+ */
+export function applySeatPreempted<T extends {
+	selfAgentId: string | null;
+	lastError: string | null;
+}>(state: T, agentId?: string | null): T {
+	if (agentId && state.selfAgentId && agentId !== state.selfAgentId) return state;
+	return {
+		...state,
+		lastError: PREEMPTED_STATUS_MESSAGE,
+	};
 }

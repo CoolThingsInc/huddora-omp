@@ -48,6 +48,13 @@ export type RoomMessage = {
 	agent_name?: string | null;
 	owner_id?: string;
 	owner_name?: string | null;
+	reply_to?: {
+		message_id: string;
+		cursor: number;
+		author_name: string;
+		snippet: string;
+	} | null;
+	mentions?: Array<{ kind: "human" | "agent"; id: string; name: string }>;
 };
 
 export type HistoryResult = {
@@ -83,7 +90,7 @@ export type RoomListItem = {
 export const CUSTOM_STATE_TYPE = "huddora-state";
 export const CUSTOM_MSG_TYPE = "huddora-chat";
 export const MCP_SERVER = "huddora";
-export const PLUGIN_VERSION = "0.3.15";
+export const PLUGIN_VERSION = "0.3.16";
 
 /** Max messages injected per poll/sync (bounded context). */
 export const INJECT_LIMIT = 40;

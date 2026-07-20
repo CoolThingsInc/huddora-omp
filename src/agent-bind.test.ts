@@ -1,12 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
+	applySeatPreempted,
 	buildAgentRegisterArgs,
 	canAttemptRebind,
 	decideHeartbeatFailure,
+	isAgentPreemptedError,
 	isAgentRevokedError,
 	isAgentUnboundError,
 	mcpToolFailureMessage,
 	needsVersionReregister,
+	PREEMPTED_STATUS_MESSAGE,
 	type RebindGate,
 } from "./agent-bind";
 
@@ -71,6 +74,19 @@ describe("decideHeartbeatFailure", () => {
 		expect(decideHeartbeatFailure("agent revoked — open account", open, 1).action).toBe("stop_revoked");
 	});
 
+	test("preempted stops without rebind thrash", () => {
+		expect(
+			decideHeartbeatFailure(
+				"agent_not_bound — this MCP session does not own the agent seat (unbound or preempted)",
+				open,
+				1,
+			).action,
+		).toBe("stop_preempted");
+		expect(decideHeartbeatFailure("agent_preempted reason=bound_elsewhere", open, 1).action).toBe(
+			"stop_preempted",
+		);
+	});
+
 	test("unbound rebinds when gate open", () => {
 		expect(
 			decideHeartbeatFailure("agent_not_bound — call agent_register first", open, 1).action,
@@ -94,6 +110,31 @@ describe("decideHeartbeatFailure", () => {
 		expect(decideHeartbeatFailure("agent_not_bound", gate, 1_000 + 1_000).action).toBe(
 			"record_error",
 		);
+	});
+});
+
+describe("seat exclusivity helpers", () => {
+	test("isAgentPreemptedError matches server phrasing", () => {
+		expect(isAgentPreemptedError("agent_preempted")).toBe(true);
+		expect(isAgentPreemptedError("bound_elsewhere")).toBe(true);
+		expect(isAgentPreemptedError("preempted by another session")).toBe(true);
+		expect(isAgentPreemptedError("agent_not_bound — call agent_register first")).toBe(false);
+	});
+
+	test("isAgentUnboundError ignores pure preempt errors", () => {
+		expect(isAgentUnboundError("agent_preempted reason=bound_elsewhere")).toBe(false);
+		expect(isAgentUnboundError("agent_not_bound — call agent_register first")).toBe(true);
+	});
+
+	test("applySeatPreempted sets recovery copy", () => {
+		const next = applySeatPreempted(
+			{ selfAgentId: "a1", lastError: null },
+			"a1",
+		);
+		expect(next.lastError).toBe(PREEMPTED_STATUS_MESSAGE);
+		expect(
+			applySeatPreempted({ selfAgentId: "a1", lastError: null }, "other").lastError,
+		).toBeNull();
 	});
 });
 

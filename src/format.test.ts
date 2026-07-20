@@ -24,6 +24,8 @@ function msg(partial: Partial<RoomMessage> & Pick<RoomMessage, "cursor" | "body"
 		agent_id: partial.agent_id ?? null,
 		agent_name: partial.agent_name ?? null,
 		owner_name: partial.owner_name ?? null,
+		reply_to: partial.reply_to,
+		mentions: partial.mentions,
 	};
 }
 
@@ -133,6 +135,85 @@ describe("formatRoomChatInjection", () => {
 		expect(text).toContain("--- c=2 author=B kind=human ---");
 		expect(text).not.toContain("msg=");
 		expect(text).not.toContain("SOURCE:");
+	});
+
+	test("reply and mentions attrs present when set", () => {
+		const text = formatRoomChatInjection({
+			roomId: "r1",
+			roomName: "Ops",
+			messages: [
+				msg({
+					cursor: 10,
+					body: "re: that",
+					author_name: "Bob",
+					reply_to: {
+						message_id: "parent-uuid-should-not-appear",
+						cursor: 7,
+						author_name: "Alice",
+						snippet: "hello there",
+					},
+					mentions: [
+						{ kind: "human", id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", name: "Alice" },
+						{ kind: "agent", id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", name: "Bot" },
+					],
+				}),
+			],
+			cursorAfter: 10,
+		});
+		expect(text).toContain("reply_c=7");
+		expect(text).toContain("reply_by=Alice");
+		expect(text).toContain('reply_snip="hello there"');
+		expect(text).toContain("mentions=Alice,Bot");
+		expect(text).not.toContain("parent-uuid-should-not-appear");
+		expect(text).not.toContain("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+		expect(text).not.toContain("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+	});
+
+	test("omits empty reply and mention attrs", () => {
+		const text = formatRoomChatInjection({
+			roomId: "r1",
+			roomName: "Ops",
+			messages: [
+				msg({
+					cursor: 3,
+					body: "plain",
+					reply_to: null,
+					mentions: [],
+				}),
+			],
+			cursorAfter: 3,
+		});
+		expect(text).toContain("<huddora_event room=r1 c=3 author=Alice kind=human data=untrusted>");
+		expect(text).not.toContain("reply_c=");
+		expect(text).not.toContain("reply_by=");
+		expect(text).not.toContain("reply_snip=");
+		expect(text).not.toContain("mentions=");
+	});
+
+	test("multi-msg reply attrs on separator line", () => {
+		const text = formatRoomChatInjection({
+			roomId: "r1",
+			roomName: "Ops",
+			messages: [
+				msg({ cursor: 1, body: "one", author_name: "A" }),
+				msg({
+					cursor: 2,
+					body: "two",
+					author_name: "B",
+					reply_to: {
+						message_id: "m1",
+						cursor: 1,
+						author_name: "A",
+						snippet: "one",
+					},
+					mentions: [{ kind: "agent", id: "cccccccc-cccc-cccc-cccc-cccccccccccc", name: "" }],
+				}),
+			],
+			cursorAfter: 2,
+		});
+		expect(text).toContain("--- c=1 author=A kind=human ---");
+		expect(text).toContain('--- c=2 author=B kind=human reply_c=1 reply_by=A reply_snip="one" mentions=cccccccc ---');
+		expect(text).not.toContain("cccccccc-cccc-cccc-cccc-cccccccccccc");
 	});
 });
 

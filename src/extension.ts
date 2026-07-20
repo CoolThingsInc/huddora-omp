@@ -9,11 +9,14 @@
  */
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import {
+	applySeatPreempted,
 	buildAgentRegisterArgs,
 	canAttemptRebind,
 	decideHeartbeatFailure,
+	isAgentPreemptedError,
 	isAgentUnboundError,
 	needsVersionReregister,
+	PREEMPTED_STATUS_MESSAGE,
 	type RebindGate,
 } from "./agent-bind";
 
@@ -93,6 +96,8 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 	let bridge: UnsafeHuddoraBridge | null = null;
 	let heartbeatOk = false;
 	let heartbeatInFlight = false;
+	/** True while this process holds the exclusive agent seat (1 seat ↔ 1 session). */
+	let seatHeldExclusive = false;
 	/** Single-flight + backoff for agent_register rebind (plugin-owned). */
 	let rebindGate: RebindGate = { inFlight: false, lastAttemptAt: 0, failStreak: 0 };
 	let onboardingTimer: TimerHandle | null = null;
@@ -104,7 +109,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		const presence = derivePresence({
 			selfAgentId: state.selfAgentId,
 			lastError: state.lastError,
-			heartbeatOk,
+			heartbeatOk: heartbeatOk && seatHeldExclusive,
 			bridgeReady: Boolean(bridge),
 		});
 		return {
@@ -120,6 +125,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 			bridgeActive: Boolean(bridge),
 			connection,
 			lastError: state.lastError,
+			seatExclusive: seatHeldExclusive && presence === "online",
 		};
 	}
 
@@ -292,6 +298,24 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		}
 	}
 
+	/** Another session claimed our seat: offline locally, stop heartbeat/inject. */
+	function handleSeatPreempted(agentId?: string | null) {
+		if (agentId && state.selfAgentId && agentId !== state.selfAgentId) return;
+		seatHeldExclusive = false;
+		heartbeatOk = false;
+		if (liveCtx) clearTimer(liveCtx);
+		const next = applySeatPreempted(state, agentId);
+		if (next.lastError === state.lastError && !seatHeldExclusive) {
+			// Already preempted; still refresh UI.
+			refreshStatusSurface();
+			return;
+		}
+		persist(next);
+		if (liveCtx?.hasUI) {
+			liveCtx.ui.notify(PREEMPTED_STATUS_MESSAGE, "warning");
+		}
+	}
+
 	/**
 	 * Mid-turn policy (midturn report):
 	 * active → steer; idle → nextTurn + triggerTurn.
@@ -427,14 +451,21 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		if (!bridge) {
 			bridge = new UnsafeHuddoraBridge();
 			const started = await bridge.start((method, params) => {
-				const renamed = parseHuddoraAgentNotification(method, params);
-				if (renamed) {
-					if (state.selfAgentId && renamed.agentId !== state.selfAgentId) return;
-					if (state.agentDisplayName === renamed.displayName) return;
-					persist({ ...state, agentDisplayName: renamed.displayName });
+				const agentEvt = parseHuddoraAgentNotification(method, params);
+				if (agentEvt) {
+					if (agentEvt.type === "agent_preempted") {
+						if (state.selfAgentId && agentEvt.agentId !== state.selfAgentId) return;
+						handleSeatPreempted(agentEvt.agentId);
+						return;
+					}
+					if (state.selfAgentId && agentEvt.agentId !== state.selfAgentId) return;
+					if (state.agentDisplayName === agentEvt.displayName) return;
+					persist({ ...state, agentDisplayName: agentEvt.displayName });
 					return;
 				}
 				if (method !== "notifications/huddora/messages") return;
+				// Lost exclusive seat: ignore inject (another process owns delivery).
+				if (!seatHeldExclusive) return;
 				const parsed = parseHuddoraMessagesNotification(method, params);
 				if (!parsed || (state.roomId && parsed.roomId !== state.roomId)) return;
 				const c = liveCtx ?? ctx;
@@ -499,6 +530,8 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 			lastExtensionVersion: PLUGIN_VERSION,
 			lastError: null,
 		});
+		seatHeldExclusive = true;
+		heartbeatOk = false; // next heartbeatTick flips online
 		rebindGate = { inFlight: false, lastAttemptAt: rebindGate.lastAttemptAt, failStreak: 0 };
 		return true;
 	}
@@ -576,8 +609,9 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 			});
 			if (res.ok) {
 				heartbeatOk = true;
+				seatHeldExclusive = true;
 				// Clear soft rebind noise once presence is healthy.
-				if (state.lastError && /rebind|heartbeat|agent_not_bound|agent_register/i.test(state.lastError)) {
+				if (state.lastError && /rebind|heartbeat|agent_not_bound|agent_register|seat taken/i.test(state.lastError)) {
 					persist({ ...state, lastError: null });
 				} else {
 					refreshStatusSurface();
@@ -587,7 +621,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 			heartbeatOk = false;
 			const decision = decideHeartbeatFailure(res.message, rebindGate, Date.now());
 			if (decision.action === "stop_revoked") {
-				heartbeatOk = false;
+				seatHeldExclusive = false;
 				persist({
 					...state,
 					selfAgentId: null,
@@ -597,12 +631,18 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 				if (liveCtx) clearTimer(liveCtx);
 				return;
 			}
+			if (decision.action === "stop_preempted") {
+				handleSeatPreempted(state.selfAgentId);
+				return;
+			}
 			if (decision.action === "wait_backoff") return;
 			if (decision.action === "record_error") {
 				// Internal only — never leave "call agent_register first" as stuck user copy.
-				const soft = isAgentUnboundError(res.message)
-					? "presence rebind backoff"
-					: `heartbeat: ${res.message}`.slice(0, 500);
+				const soft = isAgentPreemptedError(res.message)
+					? PREEMPTED_STATUS_MESSAGE
+					: isAgentUnboundError(res.message)
+						? "presence rebind backoff"
+						: `heartbeat: ${res.message}`.slice(0, 500);
 				persist({ ...state, lastError: soft });
 				return;
 			}
@@ -614,12 +654,17 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 				});
 				if (!retry.ok) {
 					heartbeatOk = false;
+					if (isAgentPreemptedError(retry.message)) {
+						handleSeatPreempted(state.selfAgentId);
+						return;
+					}
 					const soft = isAgentUnboundError(retry.message)
 						? "presence rebind pending"
 						: `heartbeat: ${retry.message}`.slice(0, 500);
 					persist({ ...state, lastError: soft });
 				} else {
 					heartbeatOk = true;
+					seatHeldExclusive = true;
 					if (state.lastError) {
 						persist({ ...state, lastError: null });
 					} else {

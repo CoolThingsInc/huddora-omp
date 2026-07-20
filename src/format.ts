@@ -26,8 +26,9 @@ export function formatRoomChatInjection(input: {
 		const m = msgs[0]!;
 		const who = escapeAttr(labelAuthor(m));
 		const kind = m.actor_kind ?? "human";
+		const extra = compactReplyAttrs(m);
 		return [
-			`<huddora_event room=${room} c=${m.cursor} author=${who} kind=${kind} data=untrusted>`,
+			`<huddora_event room=${room} c=${m.cursor} author=${who} kind=${kind}${extra} data=untrusted>`,
 			"<body>",
 			escapeHuddora(truncateBody(m.body)),
 			"</body>",
@@ -42,7 +43,8 @@ export function formatRoomChatInjection(input: {
 	for (const m of msgs) {
 		const who = escapeAttr(labelAuthor(m));
 		const kind = m.actor_kind ?? "human";
-		lines.push(`--- c=${m.cursor} author=${who} kind=${kind} ---`);
+		const extra = compactReplyAttrs(m);
+		lines.push(`--- c=${m.cursor} author=${who} kind=${kind}${extra} ---`);
 		lines.push("<body>");
 		lines.push(escapeHuddora(truncateBody(m.body)));
 		lines.push("</body>");
@@ -98,6 +100,31 @@ export function fenceUntrusted(body: string): string {
 
 function escapeAttr(value: string): string {
 	return value.replace(/[\n\r\t]/g, " ").slice(0, 200);
+}
+
+/** Compact reply/mention attrs; omit when empty (lean inject). */
+function compactReplyAttrs(m: RoomMessage): string {
+	const parts: string[] = [];
+	const rt = m.reply_to;
+	if (rt && typeof rt.cursor === "number" && Number.isFinite(rt.cursor)) {
+		parts.push(`reply_c=${rt.cursor}`);
+		const by = rt.author_name?.trim();
+		if (by) parts.push(`reply_by=${escapeAttr(by)}`);
+		const snip = rt.snippet?.trim();
+		if (snip) parts.push(`reply_snip="${escapeAttr(snip.slice(0, 80))}"`);
+	}
+	const mentions = m.mentions;
+	if (Array.isArray(mentions) && mentions.length > 0) {
+		const names: string[] = [];
+		for (const ment of mentions) {
+			const label = ment.name?.trim() || (ment.id ? ment.id.slice(0, 8) : "");
+			if (!label) continue;
+			// prefer short names; never dump full UUID in mentions=
+			names.push(escapeAttr(label.length > 20 && label.includes("-") ? label.slice(0, 8) : label));
+		}
+		if (names.length > 0) parts.push(`mentions=${names.join(",")}`);
+	}
+	return parts.length > 0 ? ` ${parts.join(" ")}` : "";
 }
 
 function labelAuthor(m: RoomMessage): string {
