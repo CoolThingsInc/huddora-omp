@@ -16,6 +16,12 @@ export {
 	maxCursor,
 } from "./format";
 export {
+	COLLABORATION_GUIDANCE,
+	COLLABORATION_GUIDANCE_VERSION,
+	COLLABORATION_HELP,
+	formatBoundRoomLine,
+} from "./guidance";
+export {
 	__setHostMcpForTests,
 	callHuddoraTool,
 	getHostMcpManager,

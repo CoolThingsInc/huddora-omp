@@ -22,7 +22,7 @@ import {
 	gateInject,
 	type RateGuardState,
 } from "./deliver";
-import { COLLABORATION_GUIDANCE, COLLABORATION_GUIDANCE_VERSION, COLLABORATION_HELP } from "./guidance";
+import { COLLABORATION_GUIDANCE, COLLABORATION_GUIDANCE_VERSION, COLLABORATION_HELP, formatBoundRoomLine } from "./guidance";
 import { boundMessages, filterOwnMessages, formatRoomChatInjection, maxCursor } from "./format";
 import {
 	callHuddoraTool,
@@ -666,11 +666,15 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		const bridgeStatus = bridge
 			? "active (auto)"
 			: "starting — needs OAuth token after /mcp reauth huddora";
+		const bound = formatBoundRoomLine(state.roomId, state.roomName);
 		return [
 			`Huddora: ${state.roomName ?? "no room"} · ${delivery} · ${state.paused ? "paused" : "active"}`,
 			`Plugin: ${conn}; agent: ${state.selfAgentId ? "registered" : "not registered"}; session: ${bridgeStatus}.`,
+			bound,
 			state.lastError ? `Next: ${state.lastError}` : state.roomId ? "Ready." : "Next: /huddora room",
-		].join("\n");
+		]
+			.filter((line): line is string => Boolean(line))
+			.join("\n");
 	}
 
 	async function startDelivery(ctx: ExtensionContext) {
@@ -781,8 +785,9 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 						delivery: deliveryLabel,
 						bridgeError: state.lastError,
 					});
+					const roomLine = formatBoundRoomLine(state.roomId, state.roomName) ?? "Room: none";
 					ctx.ui.notify(
-						`Huddora doctor\nPlugin: ${connection}\nSession: ${bridge ? "active" : "not started"}\nConfig: ${config.ok ? (config.exists ? "valid" : "missing") : config.error}\nRoom: ${state.roomName ?? "none"}\nDelivery: ${deliveryLabel}\nNext: ${next}`,
+						`Huddora doctor\nPlugin: ${connection}\nSession: ${bridge ? "active" : "not started"}\nConfig: ${config.ok ? (config.exists ? "valid" : "missing") : config.error}\n${roomLine}\nDelivery: ${deliveryLabel}\nNext: ${next}`,
 						state.roomId || transportReady ? "info" : "warning",
 					);
 					return;
