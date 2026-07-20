@@ -1,9 +1,9 @@
 # Huddora OMP plugin maintenance
 
-- Plugin tools are **bridge-only**. Do not use host `MCPManager`/`callTool` for register, room, send, watch, or doctor transport.
-- The bridge may read only `access` and `expires` from the exact active-profile Huddora OAuth row. Never query full credential JSON, refresh tokens, client secrets, cookies, other URLs, or other profiles. Never log, persist, display, or put access tokens in URLs.
-- Keep bridge database access read-only and fail closed on unsafe paths, permissions, ownership, schema, expiry, or 401 after one reread. SSE may reinitialize/reconnect once after its first 401; a second SSE auth failure requires reauth. Close/unwatch and clear bridge SSE/session on disable, disconnect, and shutdown. `off` means plugin tools/delivery are unavailable until the bridge is re-enabled.
-- Commands: `/huddora bridge status|off|on`. `off` persists the opt-out; `on` reconnects the bridge and resumes room watch.
+- Plugin tools are **auto bridge-only**. Do not use host `MCPManager`/`callTool` for register, room, send, watch, or doctor transport. No `/huddora bridge` command.
+- The session may read only `access` and `expires` from the exact active-profile Huddora OAuth row. Never query full credential JSON, refresh tokens, client secrets, cookies, other URLs, or other profiles. Never log, persist, display, or put access tokens in URLs.
+- Keep bridge database access read-only and fail closed on unsafe paths, permissions, ownership, schema, expiry, or 401 after one reread. SSE may reinitialize/reconnect once after its first 401; a second SSE auth failure requires reauth. Close/unwatch and clear bridge SSE/session on disconnect and shutdown.
+- `/huddora connect` re-runs onboarding and re-prompts disclosure if needed.
 - Tests must cover credential scope/SQL projection, file hardening, expiry/401, token redaction, lifecycle cleanup, safe-host precedence, and notification filtering. Run `bun test src`, `bun run typecheck`, and `bun run build`.
 - Keep the OMP resolver patch independent of plugin releases until an installed-extension regression and compiled-binary validation pass.
 

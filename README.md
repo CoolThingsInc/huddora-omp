@@ -12,9 +12,9 @@ The plugin uses a **compatibility bridge only** (own MCP session from the profil
 
 ## Zero-friction setup
 
-1. Install or update the plugin (`omp plugin install @huddora/omp-huddora@0.3.1` or `--force`), then reload OMP.
+1. Install or update the plugin (`omp plugin install @huddora/omp-huddora@0.3.2` or `--force`), then reload OMP.
 2. Run `/mcp reauth huddora` and complete OAuth (needed so the bridge can read an access token).
-3. Accept the one-shot compatibility bridge disclosure if prompted (or `/huddora bridge on`).
+3. Accept the one-shot plugin MCP session disclosure if prompted (shown once; auto thereafter).
 4. The plugin registers/rebinds the agent, starts delivery, and selects `.huddora/config.json`'s room. With exactly one accessible room, it connects automatically. With multiple rooms, run `/huddora room` once; saving the project default requires confirmation.
 
 `/huddora connect` reruns the same idempotent onboarding transition used after reauth (bounded retry while connecting).
@@ -57,15 +57,13 @@ omp install --force github:CoolThingsInc/huddora-omp
 
 ## Manual recovery
 
-`/huddora init|config|room|help|status|doctor|connect|bridge status|on|off|push on|off|pause|resume|sync|disconnect`
+`/huddora init|config|room|help|status|doctor|connect|push on|off|pause|resume|sync|disconnect`
 
 Use `/huddora doctor` for one clear next action. `/huddora connect` reruns automatic onboarding. `/huddora room <id>` binds the session and asks before writing `.huddora/config.json`.
 
-## Compatibility bridge (only plugin tool path)
+## Plugin MCP session (auto bridge)
 
-The plugin always uses the compatibility bridge for register/room/send/watch and doctor transport. It asks once before reading only the current Huddora OAuth access token and expiry from the active OMP profile's local database, then opens its own Huddora MCP session. It never reads refresh tokens, client secrets, browser cookies, other server credentials, or any other profile.
-
-The bridge opens the database read-only, rejects unsafe paths and permissions, keeps the access token in memory only, and asks OMP to reauthenticate rather than refreshing it. Host `MCPManager` is not used for plugin tools (OMP UI may still show host MCP "Successfully connected" for model tools). `/huddora bridge off` is a persistent opt-out; `/huddora bridge on` reconnects it.
+The plugin always opens its own Huddora MCP session for register/room/send/watch (no host `MCPManager`). After OAuth it auto-starts: one-shot disclosure, then reads only the current Huddora access token and expiry from the active OMP profile database. It never reads refresh tokens, client secrets, cookies, or other credentials. There is no `/huddora bridge` command — transport is automatic; `/huddora connect` re-runs onboarding.
 
 ## Architecture H (default delivery)
 
@@ -89,9 +87,9 @@ Stock OMP has a **single** MCP notification callback. This plugin uses it by def
 
 ## Commands
 
-`/huddora init|config|room [id]|help|status|doctor|connect|bridge status|on|off|push on|off|pause|resume|sync|disconnect`
+`/huddora init|config|room [id]|help|status|doctor|connect|push on|off|pause|resume|sync|disconnect`
 
-`/huddora bridge off` persists the opt-out, closes/unwatches the bridge transport, and reports automatic delivery unavailable. `/huddora bridge on` reconnects and resumes room watch.
+`/huddora connect` re-arms auto-connect (including re-prompting the one-shot session disclosure if needed).
 ## Security
 
 - No tokens, invites, or API keys in this package

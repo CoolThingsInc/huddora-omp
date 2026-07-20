@@ -27,17 +27,17 @@ describe("onboarding observer policy", () => {
 	});
 });
 
-describe("doctorNextStep bridge-only", () => {
+describe("doctorNextStep auto-bridge", () => {
 	test("bridge_missing never recommends reauth", () => {
 		expect(
 			doctorNextStep({ roomId: null, connection: "bridge_missing", delivery: "unknown" }),
-		).toBe("run /huddora bridge on (or wait for auto-bridge)");
+		).toBe("wait for auto-connect or run /huddora connect");
 	});
 
 	test("no_manager legacy status never recommends reauth", () => {
 		expect(
 			doctorNextStep({ roomId: null, connection: "no_manager", delivery: "unknown" }),
-		).toBe("run /huddora bridge on (or wait for auto-bridge)");
+		).toBe("wait for auto-connect or run /huddora connect");
 	});
 
 	test("bridge active points at room bind", () => {
@@ -57,10 +57,21 @@ describe("doctorNextStep bridge-only", () => {
 		).toContain("reauth");
 	});
 
-	test("roomToolFailureMessage no_host_api is not reauth", () => {
+	test("disclosure decline points at connect", () => {
+		expect(
+			doctorNextStep({
+				roomId: null,
+				connection: "bridge_missing",
+				delivery: "unknown",
+				bridgeError: "plugin MCP session disclosure declined",
+			}),
+		).toContain("connect");
+	});
+
+	test("roomToolFailureMessage no_host_api is not reauth-first", () => {
 		const msg = roomToolFailureMessage({ kind: "no_host_api", message: "x" });
-		expect(msg.toLowerCase()).not.toContain("reauth");
-		expect(msg.toLowerCase()).toContain("bridge");
+		expect(msg.toLowerCase()).not.toMatch(/^run \/mcp reauth/);
+		expect(msg.toLowerCase()).toContain("connect");
 	});
 });
 

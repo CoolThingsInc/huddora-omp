@@ -25,32 +25,33 @@ export function shouldResetOnboardingBudget(lastStatus: string | null, status: s
 	return lastStatus !== null && status !== lastStatus;
 }
 
-/** Doctor "Next:" — bridge-only; reauth only for missing/invalid OAuth for the bridge. */
+/** Doctor "Next:" — auto-bridge only; reauth for OAuth; connect to retry. */
 export function doctorNextStep(input: {
 	roomId: string | null;
 	connection: string;
 	delivery: string;
-	bridgeDisabled?: boolean;
 	bridgeError?: string | null;
 }): string {
 	if (input.roomId && (input.delivery === "bridge" || input.delivery === "poll")) return "ready";
 	if (input.roomId) return "ready";
 	if (input.delivery === "bridge") return "wait for auto-bind or run /huddora room";
-	if (input.bridgeDisabled) return "run /huddora bridge on (bridge is required for plugin tools)";
 	const err = (input.bridgeError ?? "").toLowerCase();
 	if (
 		input.connection === "disconnected" ||
 		/reauth|oauth|credential|expired|401|unauthoriz|missing/.test(err)
 	) {
-		return "run /mcp reauth huddora (OAuth token missing/expired for bridge)";
+		return "run /mcp reauth huddora (OAuth token missing/expired)";
 	}
-	return "run /huddora bridge on (or wait for auto-bridge)";
+	if (/declined|disclosure/.test(err)) {
+		return "run /huddora connect (accept plugin MCP session)";
+	}
+	return "wait for auto-connect or run /huddora connect";
 }
 
 /** Map room_list failures without blanket reauth. */
 export function roomToolFailureMessage(error: { kind: string; message: string }): string {
 	if (error.kind === "no_manager" || error.kind === "no_host_api") {
-		return "Compatibility bridge not active. Run /huddora bridge on.";
+		return "Plugin MCP session not active. Run /huddora connect (reauth if OAuth expired).";
 	}
 	if (error.kind === "disconnected") {
 		return error.message;
