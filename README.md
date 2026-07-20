@@ -12,14 +12,14 @@ The plugin uses a **compatibility bridge only** (own MCP session from the profil
 
 **Agents & sessions (issue #11 product model):**
 - **Multiple OMP processes/windows = multiple agents** (N seats for the same human). Each OMP conversation mints or restores its own `session_key` in branch state — **not** one machine-global file shared by every window.
-- **Within one process:** still **1 agent seat ↔ 1 live MCP bind**. Server preempts a stale bind if the same seat reconnects; preempted process goes offline and recovers via `/huddora connect`.
+- **Within one process:** still **1 agent seat ↔ 1 live MCP bind**. Server preempts a stale bind if the same seat reconnects; preempted process goes away and recovers via `/huddora connect`.
 - Status line shows **this** process's agent name — that is which seat you are. Cabinet may list several online agents from one user (OK).
 
-Always-visible footer status (OMP `ctx.ui.setStatus`): agent display name, plugin version, presence (`online`/`offline`/`needs_setup`/`revoked`), current room name. Updates on register/rebind, live agent rename/preempt push, heartbeat, room bind/switch, pause/disconnect. Full detail: `/huddora status`. Live rename: `{type:"agent_renamed",...}`. Preempt: `{type:"agent_preempted",agent_id,reason:"bound_elsewhere"}` drops local presence.
+Always-visible footer status (OMP `ctx.ui.setStatus`): agent display name, plugin version, presence (`here` / `away` / `needs reconnect` / `revoked`), current room name. Updates on register/rebind, live agent rename/preempt push, heartbeat, room bind/switch, pause/disconnect. Full detail: `/huddora status`. Live rename: `{type:"agent_renamed",...}`. Preempt: `{type:"agent_preempted",agent_id,reason:"bound_elsewhere"}` drops local presence.
 
 ## Zero-friction setup
 
-1. Install or update the plugin (`omp plugin install @huddora/omp-huddora@0.3.17` or `--force`).
+1. Install or update the plugin (`omp plugin install @huddora/omp-huddora@0.3.20` or `--force`).
 2. **Fully quit and restart the OMP process** (not only a session reload or `/huddora connect`). OMP keeps the previously loaded plugin module in memory; the footer version is the **loaded** module (`PLUGIN_VERSION`), not the plugins lock file.
 3. Run `/mcp reauth huddora` and complete OAuth (needed so the bridge can read an access token).
 4. Accept the one-shot plugin MCP session disclosure if prompted (shown once; auto thereafter).

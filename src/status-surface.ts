@@ -43,8 +43,12 @@ export function derivePresence(input: {
 	const err = (input.lastError ?? "").toLowerCase();
 	if (err.includes("revoked")) return "revoked";
 	if (!input.selfAgentId) return "needs_setup";
-	if (!input.bridgeReady || !input.heartbeatOk) return "offline";
-	return "online";
+	if (input.bridgeReady && input.heartbeatOk) return "online";
+	// Seat exists but this surface cannot send (rebind/preempt/unbound) → needs reconnect.
+	if (/rebind|preempt|agent_not_bound|seat taken|not bound|unbound/.test(err)) {
+		return "needs_setup";
+	}
+	return "offline";
 }
 
 function shortRoomId(roomId: string): string {
@@ -77,9 +81,9 @@ const PRESENCE: Record<
 	Presence,
 	{ icon: string; label: string; color: "success" | "warning" | "error" | "dim" }
 > = {
-	online: { icon: "●", label: "online", color: "success" },
-	offline: { icon: "○", label: "offline", color: "warning" },
-	needs_setup: { icon: "⚠", label: "needs setup", color: "dim" },
+	online: { icon: "●", label: "here", color: "success" },
+	offline: { icon: "○", label: "away", color: "warning" },
+	needs_setup: { icon: "⚠", label: "needs reconnect", color: "dim" },
 	revoked: { icon: "󰅙", label: "revoked", color: "error" },
 };
 
@@ -141,11 +145,16 @@ export function formatStatusReport(input: StatusSurfaceInput): string {
 				: input.selfAgentId
 					? "Seat: not exclusive online (rebind/heartbeat pending or offline)."
 					: "Seat: not registered.";
-	const next = input.lastError
-		? `Next: ${input.lastError}`
-		: input.roomId
+	const degraded = input.presence !== "online";
+	const errText = input.lastError ?? "";
+	const reauthHint = /oauth|reauth|token/i.test(errText);
+	const next = !degraded
+		? input.roomId
 			? "Ready."
-			: "Next: /huddora room";
+			: "Next: /huddora room"
+		: reauthHint && errText
+			? `Next: ${errText}`
+			: "Next: /huddora connect";
 	const pause = input.paused ? `  ${I.pause} paused` : "";
 	return [
 		`${I.brand} Huddora ${input.pluginVersion}  ${p.icon} ${p.label}${pause}`,

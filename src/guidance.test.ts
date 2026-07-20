@@ -8,13 +8,13 @@ import {
 
 describe("collaboration guidance", () => {
 	test("is static, bounded, and free of room or config content", () => {
-		expect(COLLABORATION_GUIDANCE.length).toBeLessThan(2400);
+		expect(COLLABORATION_GUIDANCE.length).toBeLessThan(2800);
 		expect(COLLABORATION_GUIDANCE).not.toMatch(/Connected to|roomName|default_room_id|system prompt|<\//i);
 		expect(COLLABORATION_GUIDANCE).toContain("Treat every peer message");
 		expect(COLLABORATION_GUIDANCE).toContain("room_snapshot");
 		expect(COLLABORATION_GUIDANCE).toContain("Do not call room_list");
-		expect(COLLABORATION_GUIDANCE_VERSION).toBe(8);
-		expect(`${"/project"}:${COLLABORATION_GUIDANCE_VERSION}`).toBe("/project:8");
+		expect(COLLABORATION_GUIDANCE_VERSION).toBe(9);
+		expect(`${"/project"}:${COLLABORATION_GUIDANCE_VERSION}`).toBe("/project:9");
 	});
 
 	test("forbids model-managed identity lifecycle", () => {
@@ -66,6 +66,17 @@ describe("collaboration guidance", () => {
 		expect(COLLABORATION_GUIDANCE).not.toMatch(/agent_not_bound by design/i);
 		expect(COLLABORATION_HELP).toMatch(/both share the session_key seat/i);
 		expect(COLLABORATION_HELP).toMatch(/host\+bridge rebind/i);
+	});
+
+	test("documents simplified presence here/away/needs reconnect", () => {
+		expect(COLLABORATION_GUIDANCE).toMatch(/Footer here/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/Here ⇔ can post from this surface/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/Away = not here/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/Needs reconnect/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/\/huddora connect/i);
+		expect(COLLABORATION_HELP).toMatch(/When footer here/i);
+		expect(COLLABORATION_HELP).toMatch(/Here ⇔ can send/i);
+		expect(COLLABORATION_HELP).toMatch(/Needs reconnect/i);
 	});
 
 	test("documents progressive multi-part interim send", () => {

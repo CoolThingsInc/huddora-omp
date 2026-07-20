@@ -134,7 +134,7 @@ export function buildAgentRegisterArgs(input: {
 
 /** User-facing copy when this process lost the exclusive seat. */
 export const PREEMPTED_STATUS_MESSAGE =
-	"seat taken by another session — this process is offline. Run /huddora connect to reclaim.";
+	"seat taken by another session — this process is away. Run /huddora connect to reclaim.";
 
 /**
  * Pure transition when server notifies agent_preempted or a tool says seat is elsewhere.

@@ -32,7 +32,7 @@ describe("status surface", () => {
 		expect(STATUS_KEY).toBe("huddora");
 	});
 
-	test("derivePresence covers setup/online/offline/revoked", () => {
+	test("derivePresence covers setup/online/offline/revoked and reconnect", () => {
 		expect(
 			derivePresence({
 				selfAgentId: null,
@@ -56,7 +56,23 @@ describe("status surface", () => {
 				heartbeatOk: false,
 				bridgeReady: true,
 			}),
-		).toBe("offline");
+		).toBe("needs_setup");
+		expect(
+			derivePresence({
+				selfAgentId: "a",
+				lastError: PREEMPTED_STATUS_MESSAGE,
+				heartbeatOk: false,
+				bridgeReady: true,
+			}),
+		).toBe("needs_setup");
+		expect(
+			derivePresence({
+				selfAgentId: "a",
+				lastError: "agent_not_bound",
+				heartbeatOk: false,
+				bridgeReady: false,
+			}),
+		).toBe("needs_setup");
 		expect(
 			derivePresence({
 				selfAgentId: "a",
@@ -77,11 +93,11 @@ describe("status surface", () => {
 
 	test("formatStatusLine is glanceable with icons and essentials", () => {
 		const line = formatStatusLine(base);
-		expect(line).toBe("󰒍 Huddora 0.3.17  ● online   Alice's OMP  󰭹 Slupport");
+		expect(line).toBe("󰒍 Huddora 0.3.17  ● here   Alice's OMP  󰭹 Slupport");
 		expect(formatStatusLine({ ...base, roomId: null, roomName: null })).toContain("no room");
 		expect(formatStatusLine({ ...base, paused: true })).toContain("paused");
-		expect(formatStatusLine({ ...base, presence: "offline" })).toContain("○ offline");
-		expect(formatStatusLine({ ...base, presence: "needs_setup" })).toContain("needs setup");
+		expect(formatStatusLine({ ...base, presence: "offline" })).toContain("○ away");
+		expect(formatStatusLine({ ...base, presence: "needs_setup" })).toContain("needs reconnect");
 		expect(formatStatusLine({ ...base, presence: "revoked" })).toContain("revoked");
 		expect(
 			formatStatusLine({
@@ -103,13 +119,13 @@ describe("status surface", () => {
 		};
 		const line = formatStatusLine(base, theme);
 		expect(line).toContain("[accent]󰒍 Huddora 0.3.17");
-		expect(line).toContain("[success]● online");
+		expect(line).toContain("[success]● here");
 		expect(line).toContain("[muted] Alice's OMP");
 		expect(line).toContain("[muted]󰭹 Slupport");
 		expect(tags).toEqual(["accent", "success", "muted", "muted"]);
 
 		const paused = formatStatusLine({ ...base, presence: "offline", paused: true }, theme);
-		expect(paused).toContain("[warning]○ offline");
+		expect(paused).toContain("[warning]○ away");
 		expect(paused).toContain("[warning]⏸ paused");
 	});
 
@@ -124,7 +140,7 @@ describe("status surface", () => {
 		const report = formatStatusReport({ ...base, seatExclusive: true });
 		expect(report).toContain("󰒍 Huddora 0.3.17");
 		expect(report).toContain("Loaded plugin v0.3.17 (this process)");
-		expect(report).toContain("● online");
+		expect(report).toContain("● here");
 		expect(report).toContain(" Agent: Alice's OMP (registered)");
 		expect(report).toContain("Seat: exclusive (this process holds the live session).");
 		expect(report).toContain("󰭹 Room: Slupport");
@@ -145,5 +161,12 @@ describe("status surface", () => {
 				lastError: PREEMPTED_STATUS_MESSAGE,
 			}),
 		).toContain("Seat: not held");
+		expect(
+			formatStatusReport({
+				...base,
+				presence: "needs_setup",
+				lastError: "presence rebind pending",
+			}),
+		).toContain("Next: /huddora connect");
 	});
 });
