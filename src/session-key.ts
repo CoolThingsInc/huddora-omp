@@ -1,21 +1,72 @@
 /**
- * Install-local durable session_key for agent_register rebind (Telegram seat).
- * Primary: ~/.config/huddora/session_key (UUID text). Secondary: caller fallback (branch state).
+ * Agent seat key for agent_register.
+ *
+ * Product model (issue #11):
+ * - Multiple OMP processes/windows = multiple agents (N seats for same human).
+ * - Primary durable home is OMP branch state (`state.sessionKey`), unique per conversation/process tree.
+ * - Do NOT share one install-global file across all OMP windows (that forced 1 seat thrash).
+ * - Within one process: still 1 agent_id ↔ 1 live MCP bind (server exclusivity).
+ *
+ * Optional profile-scoped file is only used when explicitly requested (tests / advanced).
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-/** Test override: directory that will contain `session_key`. */
+/** Test override: directory that will contain seat key files. */
 export const SESSION_KEY_DIR_ENV = "HUDDORA_SESSION_KEY_DIR";
 
 const KEY_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+const PROFILE_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
-export function defaultSessionKeyPath(): string {
+/** Active OMP/PI profile name (same source as compatibility bridge). */
+export function currentOmpProfile(): string {
+	const raw = (process.env.OMP_PROFILE ?? process.env.PI_PROFILE ?? "default").trim();
+	return PROFILE_RE.test(raw) ? raw : "default";
+}
+
+/**
+ * Optional on-disk path for a *named* seat under the profile.
+ * Not the default for multi-window: shared paths collide. Prefer branch state.
+ * @deprecated Prefer branch-state sessionKey; kept for tests and explicit filePath callers.
+ */
+export function defaultSessionKeyPath(profile = currentOmpProfile()): string {
 	const override = process.env[SESSION_KEY_DIR_ENV]?.trim();
-	if (override) return join(override, "session_key");
-	return join(homedir(), ".config", "huddora", "session_key");
+	const root = override || join(homedir(), ".config", "huddora", "seats");
+	// Profile-scoped (not machine-global) — still collides for two windows on same profile
+	// if used as primary; ensureSessionKey therefore prefers branch state.
+	return join(root, sanitizeSegment(profile), "session_key");
+}
+
+/** Per-process instance seat file — last-resort durability only. */
+export function processInstanceSessionKeyPath(
+	profile = currentOmpProfile(),
+	instanceId = processInstanceId(),
+): string {
+	const override = process.env[SESSION_KEY_DIR_ENV]?.trim();
+	const root = override || join(homedir(), ".config", "huddora", "seats");
+	return join(root, sanitizeSegment(profile), `instance-${sanitizeSegment(instanceId)}.key`);
+}
+
+let cachedProcessInstanceId: string | null = null;
+
+export function processInstanceId(): string {
+	// Stable for this OS process only; restarts mint a new instance id unless branch state restores the key.
+	if (cachedProcessInstanceId) return cachedProcessInstanceId;
+	const started = process.env.HUDDORA_PROCESS_INSTANCE_ID?.trim();
+	if (started && KEY_RE.test(started)) {
+		cachedProcessInstanceId = started.slice(0, 64);
+		return cachedProcessInstanceId;
+	}
+	const material = `${process.pid}:${process.ppid ?? 0}:${randomUUID()}`;
+	cachedProcessInstanceId = createHash("sha256").update(material).digest("hex").slice(0, 16);
+	return cachedProcessInstanceId;
+}
+
+function sanitizeSegment(raw: string): string {
+	const s = raw.trim().replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 64);
+	return s || "default";
 }
 
 function normalizeKey(raw: string | null | undefined): string | null {
@@ -61,22 +112,41 @@ async function writeKeyFile(filePath: string, key: string): Promise<void> {
 }
 
 /**
- * Mint once per install/profile; persist privately; return the same key thereafter.
- * Prefer install-local file; optional fallback (e.g. branch state) if file missing.
+ * Resolve the seat key for this OMP process/session.
+ *
+ * Priority:
+ * 1. `fallback` (branch state sessionKey) — per OMP conversation, survives reload
+ * 2. Explicit `filePath` if provided
+ * 3. Mint a new UUID (multi-OMP = multi-agent); optionally mirror to process-instance file
+ *
+ * Never prefers the old machine-global single file as primary (that forced one seat for all windows).
  */
 export async function ensureSessionKey(opts?: {
 	filePath?: string;
 	fallback?: string | null;
+	/** When true (default), mint/persist a process-instance file if no branch key. */
+	persistInstanceFile?: boolean;
+	profile?: string;
 }): Promise<string> {
-	const filePath = opts?.filePath ?? defaultSessionKeyPath();
-	const existing = await readKeyFile(filePath);
-	if (existing) return existing;
-
 	const fromFallback = normalizeKey(opts?.fallback ?? null);
-	const key = fromFallback ?? randomUUID();
-	await writeKeyFile(filePath, key);
+	if (fromFallback) return fromFallback;
 
-	// Another process may have won the create race — prefer whoever is on disk.
-	const onDisk = await readKeyFile(filePath);
-	return onDisk ?? key;
+	if (opts?.filePath) {
+		const existing = await readKeyFile(opts.filePath);
+		if (existing) return existing;
+		const key = randomUUID();
+		await writeKeyFile(opts.filePath, key);
+		const onDisk = await readKeyFile(opts.filePath);
+		return onDisk ?? key;
+	}
+
+	// Mint unique seat for this process — N OMP windows → N agents.
+	const key = randomUUID();
+	if (opts?.persistInstanceFile !== false) {
+		const path = processInstanceSessionKeyPath(opts?.profile ?? currentOmpProfile());
+		await writeKeyFile(path, key);
+		const onDisk = await readKeyFile(path);
+		return onDisk ?? key;
+	}
+	return key;
 }

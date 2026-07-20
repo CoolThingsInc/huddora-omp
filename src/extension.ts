@@ -501,6 +501,8 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 
 
 	async function callRegister(): Promise<boolean> {
+		// Branch state sessionKey is the seat for this OMP process/conversation.
+		// Multi-OMP windows mint distinct keys → multiple agents for one human.
 		const sessionKey = await ensureSessionKey({ fallback: state.sessionKey });
 		const res = await huddoraCall(
 			"agent_register",

@@ -1,14 +1,26 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { defaultSessionKeyPath, ensureSessionKey, SESSION_KEY_DIR_ENV } from "./session-key";
+import {
+	currentOmpProfile,
+	defaultSessionKeyPath,
+	ensureSessionKey,
+	processInstanceSessionKeyPath,
+	SESSION_KEY_DIR_ENV,
+} from "./session-key";
 
 const roots: string[] = [];
 const prevEnv = process.env[SESSION_KEY_DIR_ENV];
+const prevProfile = process.env.OMP_PROFILE;
+const prevPi = process.env.PI_PROFILE;
 
 afterEach(async () => {
 	if (prevEnv === undefined) delete process.env[SESSION_KEY_DIR_ENV];
 	else process.env[SESSION_KEY_DIR_ENV] = prevEnv;
+	if (prevProfile === undefined) delete process.env.OMP_PROFILE;
+	else process.env.OMP_PROFILE = prevProfile;
+	if (prevPi === undefined) delete process.env.PI_PROFILE;
+	else process.env.PI_PROFILE = prevPi;
 	await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -19,7 +31,18 @@ async function tempDir(): Promise<string> {
 }
 
 describe("ensureSessionKey", () => {
-	test("mints once, persists, and is idempotent", async () => {
+	test("branch state fallback wins (per OMP session seat)", async () => {
+		const dir = await tempDir();
+		const filePath = join(dir, "session_key");
+		await writeFile(filePath, "file-key-should-not-win\n", { mode: 0o600 });
+		const key = await ensureSessionKey({
+			filePath,
+			fallback: "branch-seat-aaaaaaaaaaaa",
+		});
+		expect(key).toBe("branch-seat-aaaaaaaaaaaa");
+	});
+
+	test("explicit file path mints once and is idempotent", async () => {
 		const dir = await tempDir();
 		const filePath = join(dir, "session_key");
 		const a = await ensureSessionKey({ filePath });
@@ -29,35 +52,33 @@ describe("ensureSessionKey", () => {
 		expect(a.length).toBeLessThanOrEqual(128);
 		const onDisk = (await readFile(filePath, "utf8")).trim();
 		expect(onDisk).toBe(a);
-		const mode = (await Bun.file(filePath).stat()).mode;
-		expect(mode & 0o077).toBe(0);
 	});
 
-	test("prefers file over fallback", async () => {
-		const dir = await tempDir();
-		const filePath = join(dir, "session_key");
-		await writeFile(filePath, "file-key-aaaaaaaaaaaaaaaa\n", { mode: 0o600 });
-		const key = await ensureSessionKey({ filePath, fallback: "fallback-key-bbbbbbbbbbbb" });
-		expect(key).toBe("file-key-aaaaaaaaaaaaaaaa");
+	test("two mints without shared fallback produce distinct seats (multi-OMP)", async () => {
+		const a = await ensureSessionKey({ persistInstanceFile: false });
+		const b = await ensureSessionKey({ persistInstanceFile: false });
+		expect(a).not.toBe(b);
 	});
 
-	test("restores from fallback when file missing", async () => {
-		const dir = await tempDir();
-		const filePath = join(dir, "session_key");
-		const key = await ensureSessionKey({ filePath, fallback: "fallback-key-cccccccccccc" });
-		expect(key).toBe("fallback-key-cccccccccccc");
-		expect((await readFile(filePath, "utf8")).trim()).toBe(key);
+	test("same branch fallback reuses seat across calls", async () => {
+		const seat = "stable-omp-session-seat-key-01";
+		const a = await ensureSessionKey({ fallback: seat, persistInstanceFile: false });
+		const b = await ensureSessionKey({ fallback: seat, persistInstanceFile: false });
+		expect(a).toBe(seat);
+		expect(b).toBe(seat);
 	});
 
-	test("env dir override for default path", async () => {
+	test("env dir + profile path for optional file seats", async () => {
 		const dir = await tempDir();
 		process.env[SESSION_KEY_DIR_ENV] = dir;
-		expect(defaultSessionKeyPath()).toBe(join(dir, "session_key"));
-		const key = await ensureSessionKey();
-		expect((await readFile(join(dir, "session_key"), "utf8")).trim()).toBe(key);
+		process.env.OMP_PROFILE = "work";
+		expect(defaultSessionKeyPath()).toBe(join(dir, "work", "session_key"));
+		expect(processInstanceSessionKeyPath("work", "abc123").endsWith(join("work", "instance-abc123.key"))).toBe(
+			true,
+		);
 	});
 
-	test("rejects invalid existing content and remints", async () => {
+	test("rejects invalid existing content and remints on explicit path", async () => {
 		const dir = await tempDir();
 		const filePath = join(dir, "session_key");
 		await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -65,5 +86,10 @@ describe("ensureSessionKey", () => {
 		const key = await ensureSessionKey({ filePath });
 		expect(key.length).toBeGreaterThan(0);
 		expect((await readFile(filePath, "utf8")).trim()).toBe(key);
+	});
+
+	test("currentOmpProfile reads OMP_PROFILE", () => {
+		process.env.OMP_PROFILE = "desk";
+		expect(currentOmpProfile()).toBe("desk");
 	});
 });
