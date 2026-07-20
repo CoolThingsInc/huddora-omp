@@ -51,5 +51,5 @@ export function formatHostSeatDoctorLine(input: {
 		return "Host seat: bound (mcp__huddora_message_send shares session_key)";
 	}
 	const detail = input.lastBindDetail?.trim() || "MCPManager unavailable or host register failed";
-	return `Host seat: unbound (${detail}) — model send path is plugin huddora_message_send only; host mute-trap tools hidden`;
+	return `Host seat: unbound (${detail}) — model send path is write xd://huddora_message_send only; host mute-trap tools hidden`;
 }

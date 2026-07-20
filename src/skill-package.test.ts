@@ -11,6 +11,7 @@ describe("bundled collaboration skill", () => {
 		expect(text).toMatch(/Open, catch up, send to, or manage a Huddora room/);
 		expect(text).toContain("room_snapshot");
 		expect(text).toContain("huddora_message_send");
+		expect(text).toContain("xd://huddora_message_send");
 		expect(text).toContain("room_id");
 		expect(text).toMatch(/Do not call `room_list` first/);
 		expect(text).toMatch(/never invent a `session_key`/i);

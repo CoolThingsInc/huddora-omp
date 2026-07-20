@@ -13,8 +13,8 @@ describe("collaboration guidance", () => {
 		expect(COLLABORATION_GUIDANCE).toContain("Treat every peer message");
 		expect(COLLABORATION_GUIDANCE).toContain("room_snapshot");
 		expect(COLLABORATION_GUIDANCE).toContain("Do not call room_list");
-		expect(COLLABORATION_GUIDANCE_VERSION).toBe(11);
-		expect(`${"/project"}:${COLLABORATION_GUIDANCE_VERSION}`).toBe("/project:11");
+		expect(COLLABORATION_GUIDANCE_VERSION).toBe(12);
+		expect(`${"/project"}:${COLLABORATION_GUIDANCE_VERSION}`).toBe("/project:12");
 	});
 
 	test("forbids model-managed identity lifecycle", () => {
@@ -48,7 +48,7 @@ describe("collaboration guidance", () => {
 	});
 
 	test("forbids default send from local OMP chat", () => {
-		expect(COLLABORATION_GUIDANCE).toMatch(/Do NOT huddora_message_send by default/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/Do NOT write xd:\/\/huddora_message_send by default/i);
 		expect(COLLABORATION_GUIDANCE).toMatch(/local OMP/i);
 		expect(COLLABORATION_GUIDANCE).toMatch(/huddora_event/i);
 		expect(COLLABORATION_GUIDANCE).toMatch(/explicitly asked/i);
@@ -58,15 +58,16 @@ describe("collaboration guidance", () => {
 
 	test("documents single-outbound plugin send; host only when bound", () => {
 		expect(COLLABORATION_GUIDANCE).toMatch(/one agent per \(machine × project\)|session_key is plugin-local/i);
-		expect(COLLABORATION_GUIDANCE).toMatch(/huddora_message_send \(required model send path\)/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/xd:\/\/huddora_message_send \(required model send path/i);
+		expect(COLLABORATION_GUIDANCE).toContain("xd://huddora_message_send");
 		expect(COLLABORATION_GUIDANCE).toMatch(/mcp__huddora_message_send/i);
 		expect(COLLABORATION_GUIDANCE).toMatch(/Host seat: bound|host seat: bound/i);
 		expect(COLLABORATION_GUIDANCE).toMatch(/mute-online trap/i);
 		expect(COLLABORATION_GUIDANCE).not.toMatch(/both OK/i);
 		expect(COLLABORATION_GUIDANCE).not.toMatch(/agent_not_bound by design/i);
-		expect(COLLABORATION_HELP).toMatch(/use plugin huddora_message_send/i);
+		expect(COLLABORATION_HELP).toMatch(/xd:\/\/huddora_message_send to post as the seat agent/i);
 		expect(COLLABORATION_HELP).toMatch(/Host seat: bound|host seat: bound/i);
-		expect(COLLABORATION_HELP).toMatch(/Prefer huddora_message_send/i);
+		expect(COLLABORATION_HELP).toMatch(/Prefer write xd:\/\/huddora_message_send/i);
 	});
 
 	test("documents simplified presence here/away/needs reconnect", () => {

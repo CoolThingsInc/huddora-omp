@@ -83,6 +83,6 @@ describe("formatHostSeatDoctorLine", () => {
 				hostSeatBound: false,
 				lastBindDetail: "MCPManager.instance() null (dual-package)",
 			}),
-		).toMatch(/huddora_message_send only/);
+		).toMatch(/xd:\/\/huddora_message_send only/);
 	});
 });

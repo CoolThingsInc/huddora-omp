@@ -957,7 +957,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		return {
 			block: true,
 			reason:
-				"Host mcp__huddora_message_send is unbound while the plugin holds the seat (host MCP is a different session; dual-package OMP often cannot co-bind). Use plugin tool huddora_message_send instead. /huddora doctor shows Host seat status.",
+				"Host mcp__huddora_message_send is unbound while the plugin holds the seat (host MCP is a different session; dual-package OMP often cannot co-bind). Use write xd://huddora_message_send (plugin bridge seat). /huddora doctor shows Host seat status.",
 		};
 	});
 
@@ -969,8 +969,9 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		name: "huddora_message_send",
 		label: "Huddora message send",
 		description:
-			"Send a room message via the plugin-bound bridge session (the same seat as footer Here). Required model send path when doctor Host seat is unbound. Host mcp__huddora_message_send is only valid when Host seat: bound; otherwise it is hidden as a mute-online trap. Do not use by default for local OMP chat; only when the user asked to post/notify/reply in the room or context clearly requires a room reply (inbound huddora_event, tell the room, etc.).",
-		loadMode: "essential",
+			"Send a room message via the plugin-bound bridge session (the same seat as footer Here). On OMP with tools.xdev, invoke by writing JSON args to xd://huddora_message_send (discoverable mount). Required model send path when doctor Host seat is unbound. Host mcp__huddora_message_send is only valid when Host seat: bound; otherwise it is hidden as a mute-online trap. Do not use by default for local OMP chat; only when the user asked to post/notify/reply in the room or context clearly requires a room reply (inbound huddora_event, tell the room, etc.).",
+		// discoverable so xdev mounts xd://huddora_message_send (essential stays top-level and is invisible to xd-only inventories).
+		loadMode: "discoverable",
 		approval: "write",
 		parameters: z.object({
 			room_id: z.string().describe("UUID of the room"),

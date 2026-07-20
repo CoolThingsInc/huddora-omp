@@ -58,3 +58,14 @@ describe("send-tool helpers", () => {
 		expect(out.details).toEqual({ ok: false, error: "bridge unavailable" });
 	});
 });
+
+describe("send tool presentation for xdev", () => {
+	test("extension registers huddora_message_send as discoverable (xd:// mount)", async () => {
+		const src = await Bun.file(new URL("./extension.ts", import.meta.url)).text();
+		expect(src).toMatch(/name:\s*"huddora_message_send"/);
+		expect(src).toMatch(/loadMode:\s*"discoverable"/);
+		expect(src).not.toMatch(/name:\s*"huddora_message_send"[\s\S]{0,400}loadMode:\s*"essential"/);
+		expect(src).toMatch(/xd:\/\/huddora_message_send/);
+	});
+});
+

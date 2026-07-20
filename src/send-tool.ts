@@ -1,6 +1,8 @@
 /**
  * Pure helpers for the plugin-bound huddora_message_send tool.
  * Model-facing send uses the plugin bridge session (bound seat).
+ * On OMP with tools.xdev, the tool is loadMode "discoverable" so it mounts as
+ * xd://huddora_message_send (write JSON args). Essential would hide it from xd inventory.
  * Host mcp__huddora_message_send is only co-owned when host seat bind succeeds;
  * otherwise it is a mute-online trap and is hidden from the model surface.
  */

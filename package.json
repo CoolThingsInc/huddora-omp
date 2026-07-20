@@ -1,6 +1,6 @@
 {
 	"name": "@huddora/omp-huddora",
-	"version": "0.3.22",
+	"version": "0.3.23",
 	"type": "module",
 	"description": "OMP plugin for Huddora: room chat via MCP (definition-only) + live inject (/huddora)",
 	"exports": {
