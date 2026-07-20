@@ -5,7 +5,8 @@ import {
 	currentOmpProfile,
 	defaultSessionKeyPath,
 	ensureSessionKey,
-	processInstanceSessionKeyPath,
+	projectIdFromRoot,
+	projectSessionKeyPath,
 	SESSION_KEY_DIR_ENV,
 } from "./session-key";
 
@@ -30,16 +31,61 @@ async function tempDir(): Promise<string> {
 	return path;
 }
 
-describe("ensureSessionKey", () => {
-	test("branch state fallback wins (per OMP session seat)", async () => {
-		const dir = await tempDir();
-		const filePath = join(dir, "session_key");
-		await writeFile(filePath, "file-key-should-not-win\n", { mode: 0o600 });
-		const key = await ensureSessionKey({
-			filePath,
-			fallback: "branch-seat-aaaaaaaaaaaa",
+describe("projectIdFromRoot", () => {
+	test("same root → same project id", () => {
+		expect(projectIdFromRoot("/Users/a/proj")).toBe(projectIdFromRoot("/Users/a/proj"));
+	});
+
+	test("different roots → different project ids", () => {
+		expect(projectIdFromRoot("/tmp/a")).not.toBe(projectIdFromRoot("/tmp/b"));
+	});
+});
+
+describe("ensureSessionKey (per-project durable)", () => {
+	test("same project root reuses key (N windows / restart)", async () => {
+		const store = await tempDir();
+		process.env[SESSION_KEY_DIR_ENV] = store;
+		const project = "/Users/me/apps/widget";
+		const a = await ensureSessionKey({ projectRoot: project });
+		const b = await ensureSessionKey({ projectRoot: project });
+		expect(a.key).toBe(b.key);
+		expect(a.minted).toBe(true);
+		expect(b.minted).toBe(false);
+		const path = projectSessionKeyPath(project);
+		expect((await readFile(path, "utf8")).trim()).toBe(a.key);
+	});
+
+	test("different projects mint different keys", async () => {
+		const store = await tempDir();
+		process.env[SESSION_KEY_DIR_ENV] = store;
+		const a = await ensureSessionKey({ projectRoot: "/proj/alpha" });
+		const b = await ensureSessionKey({ projectRoot: "/proj/beta" });
+		expect(a.key).not.toBe(b.key);
+		expect(a.minted).toBe(true);
+		expect(b.minted).toBe(true);
+	});
+
+	test("restart simulation: delete process memory, reload from file", async () => {
+		const store = await tempDir();
+		process.env[SESSION_KEY_DIR_ENV] = store;
+		const project = "/work/repo";
+		const first = await ensureSessionKey({ projectRoot: project });
+		// simulate new process: only the file remains
+		const second = await ensureSessionKey({ projectRoot: project, fallback: null });
+		expect(second.key).toBe(first.key);
+		expect(second.minted).toBe(false);
+	});
+
+	test("project file wins over stale branch fallback", async () => {
+		const store = await tempDir();
+		process.env[SESSION_KEY_DIR_ENV] = store;
+		const project = "/work/stable";
+		const durable = await ensureSessionKey({ projectRoot: project });
+		const out = await ensureSessionKey({
+			projectRoot: project,
+			fallback: "stale-branch-seat-key-should-not-win",
 		});
-		expect(key).toBe("branch-seat-aaaaaaaaaaaa");
+		expect(out.key).toBe(durable.key);
 	});
 
 	test("explicit file path mints once and is idempotent", async () => {
@@ -47,45 +93,39 @@ describe("ensureSessionKey", () => {
 		const filePath = join(dir, "session_key");
 		const a = await ensureSessionKey({ filePath });
 		const b = await ensureSessionKey({ filePath });
-		expect(a).toBe(b);
-		expect(a.length).toBeGreaterThanOrEqual(1);
-		expect(a.length).toBeLessThanOrEqual(128);
+		expect(a.key).toBe(b.key);
+		expect(a.key.length).toBeGreaterThanOrEqual(1);
+		expect(a.key.length).toBeLessThanOrEqual(128);
 		const onDisk = (await readFile(filePath, "utf8")).trim();
-		expect(onDisk).toBe(a);
+		expect(onDisk).toBe(a.key);
 	});
 
-	test("two mints without shared fallback produce distinct seats (multi-OMP)", async () => {
-		const a = await ensureSessionKey({ persistInstanceFile: false });
-		const b = await ensureSessionKey({ persistInstanceFile: false });
-		expect(a).not.toBe(b);
-	});
-
-	test("same branch fallback reuses seat across calls", async () => {
+	test("fallback only used when no project/file path", async () => {
 		const seat = "stable-omp-session-seat-key-01";
-		const a = await ensureSessionKey({ fallback: seat, persistInstanceFile: false });
-		const b = await ensureSessionKey({ fallback: seat, persistInstanceFile: false });
-		expect(a).toBe(seat);
-		expect(b).toBe(seat);
+		const a = await ensureSessionKey({ fallback: seat });
+		const b = await ensureSessionKey({ fallback: seat });
+		expect(a.key).toBe(seat);
+		expect(b.key).toBe(seat);
+		expect(a.minted).toBe(false);
 	});
 
-	test("env dir + profile path for optional file seats", async () => {
-		const dir = await tempDir();
-		process.env[SESSION_KEY_DIR_ENV] = dir;
-		process.env.OMP_PROFILE = "work";
-		expect(defaultSessionKeyPath()).toBe(join(dir, "work", "session_key"));
-		expect(processInstanceSessionKeyPath("work", "abc123").endsWith(join("work", "instance-abc123.key"))).toBe(
-			true,
-		);
+	test("path layout under config root", async () => {
+		const store = await tempDir();
+		process.env[SESSION_KEY_DIR_ENV] = store;
+		const project = "/Users/me/apps/widget";
+		const id = projectIdFromRoot(project);
+		expect(projectSessionKeyPath(project)).toBe(join(store, "projects", id, "session_key"));
+		expect(defaultSessionKeyPath(project)).toBe(projectSessionKeyPath(project));
 	});
 
-	test("rejects invalid existing content and remints on explicit path", async () => {
+	test("rejects invalid existing content and remints", async () => {
 		const dir = await tempDir();
 		const filePath = join(dir, "session_key");
 		await mkdir(dir, { recursive: true, mode: 0o700 });
 		await writeFile(filePath, "   \n", { mode: 0o600 });
 		const key = await ensureSessionKey({ filePath });
-		expect(key.length).toBeGreaterThan(0);
-		expect((await readFile(filePath, "utf8")).trim()).toBe(key);
+		expect(key.key.length).toBeGreaterThan(0);
+		expect((await readFile(filePath, "utf8")).trim()).toBe(key.key);
 	});
 
 	test("currentOmpProfile reads OMP_PROFILE", () => {

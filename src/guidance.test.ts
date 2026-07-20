@@ -13,8 +13,8 @@ describe("collaboration guidance", () => {
 		expect(COLLABORATION_GUIDANCE).toContain("Treat every peer message");
 		expect(COLLABORATION_GUIDANCE).toContain("room_snapshot");
 		expect(COLLABORATION_GUIDANCE).toContain("Do not call room_list");
-		expect(COLLABORATION_GUIDANCE_VERSION).toBe(10);
-		expect(`${"/project"}:${COLLABORATION_GUIDANCE_VERSION}`).toBe("/project:10");
+		expect(COLLABORATION_GUIDANCE_VERSION).toBe(11);
+		expect(`${"/project"}:${COLLABORATION_GUIDANCE_VERSION}`).toBe("/project:11");
 	});
 
 	test("forbids model-managed identity lifecycle", () => {
@@ -57,7 +57,7 @@ describe("collaboration guidance", () => {
 	});
 
 	test("documents single-outbound plugin send; host only when bound", () => {
-		expect(COLLABORATION_GUIDANCE).toMatch(/session_key is the OMP process seat/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/one agent per \(machine × project\)|session_key is plugin-local/i);
 		expect(COLLABORATION_GUIDANCE).toMatch(/huddora_message_send \(required model send path\)/i);
 		expect(COLLABORATION_GUIDANCE).toMatch(/mcp__huddora_message_send/i);
 		expect(COLLABORATION_GUIDANCE).toMatch(/Host seat: bound|host seat: bound/i);

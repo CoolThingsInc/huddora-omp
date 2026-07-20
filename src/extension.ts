@@ -554,11 +554,23 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 
 
 	async function callRegister(): Promise<boolean> {
-		// Branch state sessionKey is the seat for this OMP process/conversation.
-		// Multi-OMP windows mint distinct keys → multiple agents for one human.
-		const sessionKey = await ensureSessionKey({ fallback: state.sessionKey });
+		// Per-project durable seat: same project root → same session_key across windows/restarts.
+		// Path: ~/.config/huddora/projects/<project-id>/session_key (local only; never git).
+		const cwd = liveCtx?.cwd ?? null;
+		const projectRoot =
+			state.projectRoot ??
+			(cwd ? await resolveProjectRoot(cwd).catch(() => cwd) : null);
+		const { key: sessionKey } = await ensureSessionKey({
+			projectRoot,
+			// Branch cache only when project root is unknown (should be rare).
+			fallback: projectRoot ? null : state.sessionKey,
+		});
+		// First project bind: omit selfAgentId so server can create; rebind keeps rename (no display_name stomp).
+		// If branch still holds a different project's seat id, clear it when key diverges.
+		const seatMatchesBranch = Boolean(state.sessionKey && state.sessionKey === sessionKey);
+		const selfAgentIdForRegister = seatMatchesBranch ? state.selfAgentId : null;
 		const registerArgs = buildAgentRegisterArgs({
-			selfAgentId: state.selfAgentId,
+			selfAgentId: selfAgentIdForRegister,
 			agentDisplayName: state.agentDisplayName,
 			selfDisplayName: state.selfDisplayName,
 			pluginVersion: PLUGIN_VERSION,
@@ -580,6 +592,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 			...state,
 			selfAgentId: id,
 			sessionKey,
+			projectRoot: projectRoot ?? state.projectRoot,
 			agentDisplayName: typeof name === "string" ? name : state.agentDisplayName,
 			lastExtensionVersion: PLUGIN_VERSION,
 			lastError: null,

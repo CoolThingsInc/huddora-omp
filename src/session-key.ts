@@ -1,24 +1,30 @@
 /**
  * Agent seat key for agent_register.
  *
- * Product model (issue #11):
- * - Multiple OMP processes/windows = multiple agents (N seats for same human).
- * - Primary durable home is OMP branch state (`state.sessionKey`), unique per conversation/process tree.
- * - Do NOT share one install-global file across all OMP windows (that forced 1 seat thrash).
- * - Within one process: still 1 agent_id ↔ 1 live MCP bind (server exclusivity).
- *
- * Optional profile-scoped file is only used when explicitly requested (tests / advanced).
+ * Product model:
+ * - 1 user × 1 machine × 1 project → 1 agent
+ * - N OMP windows on the same project root share one durable session_key
+ * - Restart same project → same agent; different project/machine → different agent
+ * - Seat file is LOCAL only: ~/.config/huddora/projects/<project-id>/session_key
+ * - Never store session_key in git or .huddora/config.json
+ * - Within one process: still 1 agent_id ↔ 1 live MCP bind (server exclusivity)
  */
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-/** Test override: directory that will contain seat key files. */
+/** Test override: replaces ~/.config/huddora as the seat store root. */
 export const SESSION_KEY_DIR_ENV = "HUDDORA_SESSION_KEY_DIR";
 
 const KEY_RE = /^[A-Za-z0-9._:-]{1,128}$/;
 const PROFILE_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+
+export type EnsureSessionKeyResult = {
+	key: string;
+	/** True only when this call created a brand-new seat file (first bind for the project). */
+	minted: boolean;
+};
 
 /** Active OMP/PI profile name (same source as compatibility bridge). */
 export function currentOmpProfile(): string {
@@ -26,42 +32,34 @@ export function currentOmpProfile(): string {
 	return PROFILE_RE.test(raw) ? raw : "default";
 }
 
+/** Stable project id from canonical project root (realpath string). */
+export function projectIdFromRoot(projectRoot: string): string {
+	const root = projectRoot.trim();
+	if (!root) return "unknown";
+	return createHash("sha256").update(root).digest("hex").slice(0, 32);
+}
+
+/** Root of local huddora config (not the OMP project). */
+export function huddoraConfigRoot(): string {
+	const override = process.env[SESSION_KEY_DIR_ENV]?.trim();
+	return override || join(homedir(), ".config", "huddora");
+}
+
 /**
- * Optional on-disk path for a *named* seat under the profile.
- * Not the default for multi-window: shared paths collide. Prefer branch state.
- * @deprecated Prefer branch-state sessionKey; kept for tests and explicit filePath callers.
+ * Durable per-project seat path:
+ * `~/.config/huddora/projects/<project-id>/session_key`
  */
-export function defaultSessionKeyPath(profile = currentOmpProfile()): string {
-	const override = process.env[SESSION_KEY_DIR_ENV]?.trim();
-	const root = override || join(homedir(), ".config", "huddora", "seats");
-	// Profile-scoped (not machine-global) — still collides for two windows on same profile
-	// if used as primary; ensureSessionKey therefore prefers branch state.
-	return join(root, sanitizeSegment(profile), "session_key");
+export function projectSessionKeyPath(projectRoot: string): string {
+	const id = projectIdFromRoot(projectRoot);
+	return join(huddoraConfigRoot(), "projects", id, "session_key");
 }
 
-/** Per-process instance seat file — last-resort durability only. */
-export function processInstanceSessionKeyPath(
-	profile = currentOmpProfile(),
-	instanceId = processInstanceId(),
-): string {
-	const override = process.env[SESSION_KEY_DIR_ENV]?.trim();
-	const root = override || join(homedir(), ".config", "huddora", "seats");
-	return join(root, sanitizeSegment(profile), `instance-${sanitizeSegment(instanceId)}.key`);
-}
-
-let cachedProcessInstanceId: string | null = null;
-
-export function processInstanceId(): string {
-	// Stable for this OS process only; restarts mint a new instance id unless branch state restores the key.
-	if (cachedProcessInstanceId) return cachedProcessInstanceId;
-	const started = process.env.HUDDORA_PROCESS_INSTANCE_ID?.trim();
-	if (started && KEY_RE.test(started)) {
-		cachedProcessInstanceId = started.slice(0, 64);
-		return cachedProcessInstanceId;
-	}
-	const material = `${process.pid}:${process.ppid ?? 0}:${randomUUID()}`;
-	cachedProcessInstanceId = createHash("sha256").update(material).digest("hex").slice(0, 16);
-	return cachedProcessInstanceId;
+/**
+ * @deprecated Use projectSessionKeyPath. Kept for older call sites/tests.
+ */
+export function defaultSessionKeyPath(projectRoot?: string): string {
+	if (projectRoot?.trim()) return projectSessionKeyPath(projectRoot);
+	return join(huddoraConfigRoot(), "projects", "unknown", "session_key");
 }
 
 function sanitizeSegment(raw: string): string {
@@ -112,41 +110,74 @@ async function writeKeyFile(filePath: string, key: string): Promise<void> {
 }
 
 /**
- * Resolve the seat key for this OMP process/session.
+ * Load-or-create the durable seat for a project.
  *
  * Priority:
- * 1. `fallback` (branch state sessionKey) — per OMP conversation, survives reload
- * 2. Explicit `filePath` if provided
- * 3. Mint a new UUID (multi-OMP = multi-agent); optionally mirror to process-instance file
+ * 1. `projectRoot` seat file (shared across OMP windows / restarts)
+ * 2. Explicit `filePath` (tests)
+ * 3. Valid `fallback` only when no project/file path (branch cache; not preferred)
+ * 4. Mint UUID (no durability)
  *
- * Never prefers the old machine-global single file as primary (that forced one seat for all windows).
+ * Concurrent windows race-safe via O_EXCL create + re-read.
+ * Branch `fallback` never seeds a different project's empty file (avoids cross-project stomp).
  */
 export async function ensureSessionKey(opts?: {
+	projectRoot?: string | null;
 	filePath?: string;
 	fallback?: string | null;
-	/** When true (default), mint/persist a process-instance file if no branch key. */
+	/** @deprecated ignored — process-instance seats are gone */
 	persistInstanceFile?: boolean;
+	/** @deprecated ignored — seats are per-project, not per-profile */
 	profile?: string;
-}): Promise<string> {
-	const fromFallback = normalizeKey(opts?.fallback ?? null);
-	if (fromFallback) return fromFallback;
+}): Promise<EnsureSessionKeyResult> {
+	const projectRoot = opts?.projectRoot?.trim() || null;
+	if (projectRoot) {
+		return loadOrCreateKeyFile(projectSessionKeyPath(projectRoot));
+	}
 
 	if (opts?.filePath) {
-		const existing = await readKeyFile(opts.filePath);
-		if (existing) return existing;
-		const key = randomUUID();
-		await writeKeyFile(opts.filePath, key);
-		const onDisk = await readKeyFile(opts.filePath);
-		return onDisk ?? key;
+		return loadOrCreateKeyFile(opts.filePath);
 	}
 
-	// Mint unique seat for this process — N OMP windows → N agents.
+	const fromFallback = normalizeKey(opts?.fallback ?? null);
+	if (fromFallback) return { key: fromFallback, minted: false };
+
+	return { key: randomUUID(), minted: true };
+}
+
+async function loadOrCreateKeyFile(filePath: string): Promise<EnsureSessionKeyResult> {
+	const existing = await readKeyFile(filePath);
+	if (existing) return { key: existing, minted: false };
+
 	const key = randomUUID();
-	if (opts?.persistInstanceFile !== false) {
-		const path = processInstanceSessionKeyPath(opts?.profile ?? currentOmpProfile());
-		await writeKeyFile(path, key);
-		const onDisk = await readKeyFile(path);
-		return onDisk ?? key;
+	await writeKeyFile(filePath, key);
+	const onDisk = await readKeyFile(filePath);
+	const finalKey = onDisk ?? key;
+	// Another window may have won the create race — only we minted if final equals our UUID.
+	return { key: finalKey, minted: finalKey === key };
+}
+
+// --- legacy helpers (tests / rare callers) ---
+
+/** @deprecated process-instance seats removed; kept so old imports don't break mid-rollout */
+export function processInstanceSessionKeyPath(
+	_profile = currentOmpProfile(),
+	instanceId = "legacy",
+): string {
+	return join(huddoraConfigRoot(), "legacy", `instance-${sanitizeSegment(instanceId)}.key`);
+}
+
+let cachedProcessInstanceId: string | null = null;
+
+/** @deprecated */
+export function processInstanceId(): string {
+	if (cachedProcessInstanceId) return cachedProcessInstanceId;
+	const started = process.env.HUDDORA_PROCESS_INSTANCE_ID?.trim();
+	if (started && KEY_RE.test(started)) {
+		cachedProcessInstanceId = started.slice(0, 64);
+		return cachedProcessInstanceId;
 	}
-	return key;
+	const material = `${process.pid}:${process.ppid ?? 0}:${randomUUID()}`;
+	cachedProcessInstanceId = createHash("sha256").update(material).digest("hex").slice(0, 16);
+	return cachedProcessInstanceId;
 }
