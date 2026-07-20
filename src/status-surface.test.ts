@@ -9,7 +9,7 @@ import {
 } from "./status-surface";
 
 const base = {
-	pluginVersion: "0.3.12",
+	pluginVersion: "0.3.13",
 	agentDisplayName: "Alice's OMP",
 	selfAgentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
 	roomId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
@@ -76,7 +76,7 @@ describe("status surface", () => {
 
 	test("formatStatusLine is glanceable with icons and essentials", () => {
 		const line = formatStatusLine(base);
-		expect(line).toBe("󰒍 Huddora 0.3.12  ● online   Alice's OMP  󰭹 Slupport");
+		expect(line).toBe("󰒍 Huddora 0.3.13  ● online   Alice's OMP  󰭹 Slupport");
 		expect(formatStatusLine({ ...base, roomId: null, roomName: null })).toContain("no room");
 		expect(formatStatusLine({ ...base, paused: true })).toContain("paused");
 		expect(formatStatusLine({ ...base, presence: "offline" })).toContain("○ offline");
@@ -101,7 +101,7 @@ describe("status surface", () => {
 			},
 		};
 		const line = formatStatusLine(base, theme);
-		expect(line).toContain("[accent]󰒍 Huddora 0.3.12");
+		expect(line).toContain("[accent]󰒍 Huddora 0.3.13");
 		expect(line).toContain("[success]● online");
 		expect(line).toContain("[muted] Alice's OMP");
 		expect(line).toContain("[muted]󰭹 Slupport");
@@ -121,8 +121,8 @@ describe("status surface", () => {
 
 	test("formatStatusReport includes version, agent, room name, room_id", () => {
 		const report = formatStatusReport(base);
-		expect(report).toContain("󰒍 Huddora 0.3.12");
-		expect(report).toContain("Loaded plugin v0.3.12 (this process)");
+		expect(report).toContain("󰒍 Huddora 0.3.13");
+		expect(report).toContain("Loaded plugin v0.3.13 (this process)");
 		expect(report).toContain("● online");
 		expect(report).toContain(" Agent: Alice's OMP (registered)");
 		expect(report).toContain("󰭹 Room: Slupport");
@@ -131,7 +131,7 @@ describe("status surface", () => {
 		expect(formatStatusReport({ ...base, roomId: null, roomName: null, selfAgentId: null })).toContain(
 			"Next: /huddora room",
 		);
-		expect(formatStatusLine(base, plainTheme)).toContain("Huddora 0.3.12");
+		expect(formatStatusLine(base, plainTheme)).toContain("Huddora 0.3.13");
 		expect(
 			formatStatusReport({ ...base, lastExtensionVersion: "0.3.8" }),
 		).toContain("Last seat stamp: 0.3.8");

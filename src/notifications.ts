@@ -1,11 +1,18 @@
 import type { RoomMessage } from "./types";
 
 export const HUDDORA_MESSAGES_METHOD = "notifications/huddora/messages";
+export const HUDDORA_AGENT_METHOD = "notifications/huddora/agent";
 
 export type HuddoraMessagesNotification = {
 	roomId: string;
 	messages: RoomMessage[];
 	nextCursor: number | null;
+};
+
+export type HuddoraAgentRenamedNotification = {
+	type: "agent_renamed";
+	agentId: string;
+	displayName: string;
 };
 
 /** Parse custom MCP notification; ignore unknown methods. */
@@ -49,6 +56,26 @@ export function parseHuddoraMessagesNotification(
 		roomId,
 		messages: parsed,
 		nextCursor: typeof next === "number" && Number.isFinite(next) ? next : null,
+	};
+}
+
+/** Parse agent lifecycle push; only agent_renamed for now. */
+export function parseHuddoraAgentNotification(
+	method: string,
+	params: unknown,
+): HuddoraAgentRenamedNotification | null {
+	if (method !== HUDDORA_AGENT_METHOD) return null;
+	if (!params || typeof params !== "object") return null;
+	const type = Reflect.get(params, "type");
+	if (type !== "agent_renamed") return null;
+	const agentId = Reflect.get(params, "agent_id");
+	const displayName = Reflect.get(params, "display_name");
+	if (typeof agentId !== "string" || !agentId.trim()) return null;
+	if (typeof displayName !== "string" || !displayName.trim()) return null;
+	return {
+		type: "agent_renamed",
+		agentId: agentId.trim(),
+		displayName: displayName.trim(),
 	};
 }
 

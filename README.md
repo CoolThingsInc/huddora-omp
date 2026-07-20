@@ -10,11 +10,11 @@ Public **OMP plugin** for [Huddora](https://huddora.coolthings.fyi) — shared r
 
 The plugin uses a **compatibility bridge only** (own MCP session from the profile Huddora access token). Host `MCPManager` is not used for plugin tools. After OAuth and a one-time bridge disclosure, it **automatically** registers the agent, heartbeats presence, and selects a project room. On reconnect/`agent_not_bound` the plugin **auto-rebinds** (install `session_key` seat, single-flight + backoff) and re-arms `room_watch` without model intervention. Live push skips the agent's own agent-authored messages; owner SPA/human posts still inject to bound agent seats. The model never owns identity.
 
-Always-visible footer status (OMP `ctx.ui.setStatus`): agent display name, plugin version, presence (`online`/`offline`/`needs_setup`/`revoked`), current room name. Updates on register/rebind, heartbeat, room bind/switch, pause/disconnect. Full detail: `/huddora status`.
+Always-visible footer status (OMP `ctx.ui.setStatus`): agent display name, plugin version, presence (`online`/`offline`/`needs_setup`/`revoked`), current room name. Updates on register/rebind, live agent rename push, heartbeat, room bind/switch, pause/disconnect. Full detail: `/huddora status`. Live rename: server `notifications/huddora/agent` `{type:"agent_renamed",agent_id,display_name}` updates local `agentDisplayName` + footer without rebind.
 
 ## Zero-friction setup
 
-1. Install or update the plugin (`omp plugin install @huddora/omp-huddora@0.3.12` or `--force`).
+1. Install or update the plugin (`omp plugin install @huddora/omp-huddora@0.3.13` or `--force`).
 2. **Fully quit and restart the OMP process** (not only a session reload or `/huddora connect`). OMP keeps the previously loaded plugin module in memory; the footer version is the **loaded** module (`PLUGIN_VERSION`), not the plugins lock file.
 3. Run `/mcp reauth huddora` and complete OAuth (needed so the bridge can read an access token).
 4. Accept the one-shot plugin MCP session disclosure if prompted (shown once; auto thereafter).

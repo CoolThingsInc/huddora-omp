@@ -30,7 +30,9 @@ export {
 } from "./mcp-client";
 export { UnsafeHuddoraBridge } from "./unsafe-bridge";
 export {
+	HUDDORA_AGENT_METHOD,
 	HUDDORA_MESSAGES_METHOD,
+	parseHuddoraAgentNotification,
 	parseHuddoraMessagesNotification,
 } from "./notifications";
 export { installChainedNotificationHandler } from "./notify-hook";

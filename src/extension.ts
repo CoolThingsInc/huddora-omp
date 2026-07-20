@@ -32,7 +32,7 @@ import {
 	mcpRoomList,
 	setCompatibilityBridge,
 } from "./mcp-client";
-import { parseHuddoraMessagesNotification } from "./notifications";
+import { parseHuddoraAgentNotification, parseHuddoraMessagesNotification } from "./notifications";
 import { advanceCursor, markError, nextPollDelayMs, restoreStateFromBranch } from "./state";
 import {
 	derivePresence,
@@ -427,6 +427,13 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		if (!bridge) {
 			bridge = new UnsafeHuddoraBridge();
 			const started = await bridge.start((method, params) => {
+				const renamed = parseHuddoraAgentNotification(method, params);
+				if (renamed) {
+					if (state.selfAgentId && renamed.agentId !== state.selfAgentId) return;
+					if (state.agentDisplayName === renamed.displayName) return;
+					persist({ ...state, agentDisplayName: renamed.displayName });
+					return;
+				}
 				if (method !== "notifications/huddora/messages") return;
 				const parsed = parseHuddoraMessagesNotification(method, params);
 				if (!parsed || (state.roomId && parsed.roomId !== state.roomId)) return;
