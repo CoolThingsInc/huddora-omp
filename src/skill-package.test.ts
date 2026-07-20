@@ -25,8 +25,8 @@ describe("bundled collaboration skill", () => {
 		expect(text).toMatch(/self-echo filtered/i);
 		expect(text).toMatch(/mcp__huddora_message_send/);
 		expect(text).toMatch(/session_key` is the OMP process seat|session_key is the OMP process seat/i);
-		expect(text).toMatch(/co-binds host \+ bridge/i);
-		expect(text).toMatch(/both.*OK|plugin-bound|shared seat/i);
-		expect(text).not.toMatch(/different unbound session/i);
+		expect(text).toMatch(/required model send path|plugin-bound|Host seat: bound/i);
+		expect(text).toMatch(/mute-online trap|unsupported\/hidden|Host seat: bound/i);
+		expect(text).not.toMatch(/both.*OK when footer online/i);
 	});
 });

@@ -26,9 +26,9 @@ describe("parseHostToolResult", () => {
 });
 
 describe("bindHostAgentSeat", () => {
-	test("returns false when MCPManager.instance is null", async () => {
-		const ok = await bindHostAgentSeat(
-			{ session_key: "seat", extension_version: "0.3.19", harness: "omp", delivery_mode: "mcp_push" },
+	test("returns detail when MCPManager.instance is null", async () => {
+		const out = await bindHostAgentSeat(
+			{ session_key: "seat", extension_version: "0.3.21", harness: "omp", delivery_mode: "mcp_push" },
 			{
 				loadMcp: async () => ({
 					MCPManager: { instance: () => undefined },
@@ -38,7 +38,9 @@ describe("bindHostAgentSeat", () => {
 				}),
 			},
 		);
-		expect(ok).toBe(false);
+		expect(out.ok).toBe(false);
+		expect(out.detail).toMatch(/MCPManager\.instance\(\) null/);
+		expect(out.detail).toMatch(/dual-package/);
 	});
 
 	test("calls agent_register on host connection with same args", async () => {
@@ -46,11 +48,11 @@ describe("bindHostAgentSeat", () => {
 		const conn = { id: "host-conn" };
 		const args = {
 			session_key: "seat-a",
-			extension_version: "0.3.19",
+			extension_version: "0.3.21",
 			harness: "omp",
 			delivery_mode: "mcp_push",
 		};
-		const ok = await bindHostAgentSeat(args, {
+		const out = await bindHostAgentSeat(args, {
 			loadMcp: async () => ({
 				MCPManager: {
 					instance: () => ({
@@ -64,12 +66,13 @@ describe("bindHostAgentSeat", () => {
 				},
 			}),
 		});
-		expect(ok).toBe(true);
+		expect(out.ok).toBe(true);
+		expect(out.detail).toMatch(/ok/);
 		expect(calls).toEqual([{ tool: "agent_register", args }]);
 	});
 
-	test("waitForConnection timeout soft-fails", async () => {
-		const ok = await bindHostAgentSeat(
+	test("waitForConnection timeout soft-fails with detail", async () => {
+		const out = await bindHostAgentSeat(
 			{ session_key: "seat" },
 			{
 				timeoutMs: 20,
@@ -84,6 +87,7 @@ describe("bindHostAgentSeat", () => {
 				}),
 			},
 		);
-		expect(ok).toBe(false);
+		expect(out.ok).toBe(false);
+		expect(out.detail).toMatch(/not ready/);
 	});
 });

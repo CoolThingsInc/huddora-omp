@@ -2,8 +2,10 @@
  * Host MCP seat bind — co-claim the same session_key on the host huddora connection
  * so model tools (mcp__huddora_message_send) share identity with the bridge.
  *
- * Best-effort: MCPManager.instance() may be null in the extension process.
- * Bridge remains authoritative for presence/watch when host bind fails.
+ * Best-effort: plugin dynamic import of @oh-my-pi/pi-coding-agent/mcp often resolves to a
+ * different module instance than the bundled omp binary (dual-package). Then
+ * MCPManager.instance() is null even though host tools work — host bind soft-fails and
+ * the plugin falls back to single-outbound (hide host mute-trap tools).
  */
 
 export type HostRegisterResult = {
@@ -55,14 +57,20 @@ export type HostSeatDeps = {
 	timeoutMs?: number;
 };
 
+export type HostBindOutcome = {
+	ok: boolean;
+	/** Short reason for doctor / residual honesty. */
+	detail: string;
+};
+
 /**
  * Bind host MCP "huddora" connection with the same agent_register args as the bridge.
- * Returns whether host seat was successfully bound.
+ * Returns ok + diagnostic detail (never throws).
  */
 export async function bindHostAgentSeat(
 	args: Record<string, unknown>,
 	deps: HostSeatDeps = {},
-): Promise<boolean> {
+): Promise<HostBindOutcome> {
 	const timeoutMs = deps.timeoutMs ?? 3_000;
 	try {
 		const load =
@@ -76,7 +84,13 @@ export async function bindHostAgentSeat(
 			});
 		const { MCPManager, callTool } = await load();
 		const manager = MCPManager.instance();
-		if (!manager) return false;
+		if (!manager) {
+			// Dual-package: plugin node_modules MCPManager ≠ bundled omp singleton.
+			return {
+				ok: false,
+				detail: "MCPManager.instance() null (plugin import ≠ host singleton / dual-package)",
+			};
+		}
 
 		let conn = manager.getConnection("huddora");
 		if (!conn) {
@@ -85,12 +99,21 @@ export async function bindHostAgentSeat(
 				new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
 			]);
 		}
-		if (!conn) return false;
+		if (!conn) {
+			return { ok: false, detail: `huddora host connection not ready within ${timeoutMs}ms` };
+		}
 
 		const result = await callTool(conn as never, "agent_register", args);
 		const parsed = parseHostToolResult(result);
-		return parsed.ok;
-	} catch {
-		return false;
+		if (!parsed.ok) {
+			return {
+				ok: false,
+				detail: `host agent_register failed: ${(parsed.message ?? "error").slice(0, 200)}`,
+			};
+		}
+		return { ok: true, detail: "host agent_register ok" };
+	} catch (e) {
+		const msg = e instanceof Error ? e.message : String(e);
+		return { ok: false, detail: `host bind exception: ${msg.slice(0, 200)}` };
 	}
 }

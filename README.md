@@ -19,7 +19,7 @@ Always-visible footer status (OMP `ctx.ui.setStatus`): agent display name, plugi
 
 ## Zero-friction setup
 
-1. Install or update the plugin (`omp plugin install @huddora/omp-huddora@0.3.20` or `--force`).
+1. Install or update the plugin (`omp plugin install @huddora/omp-huddora@0.3.21` or `--force`).
 2. **Fully quit and restart the OMP process** (not only a session reload or `/huddora connect`). OMP keeps the previously loaded plugin module in memory; the footer version is the **loaded** module (`PLUGIN_VERSION`), not the plugins lock file.
 3. Run `/mcp reauth huddora` and complete OAuth (needed so the bridge can read an access token).
 4. Accept the one-shot plugin MCP session disclosure if prompted (shown once; auto thereafter).

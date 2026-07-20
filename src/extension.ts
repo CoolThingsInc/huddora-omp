@@ -55,6 +55,12 @@ import {
 import { bootstrapRoom, durablePayload, longPollWaitMs, pullAndFormat } from "./sync";
 import { buildMessageSendArgs, formatMessageSendToolResult } from "./send-tool";
 import { bindHostAgentSeat } from "./host-seat";
+import {
+	filterActiveToolsForSeat,
+	formatHostSeatDoctorLine,
+	isHostHuddoraMuteTrapTool,
+	mergeHostToolsWhenBound,
+} from "./host-tools";
 import { ensureSessionKey } from "./session-key";
 import {
 	decideRoomBinding,
@@ -102,7 +108,10 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 	let seatHeldExclusive = false;
 	/** Host MCP agent_register succeeded for this process seat (best-effort). */
 	let hostSeatBound = false;
-	/** Single-flight + backoff for agent_register rebind (plugin-owned). */
+	/** Last host bind diagnostic for doctor honesty. */
+	let hostBindDetail: string | null = null;
+	/** Single-flight guard so setActiveTools is not re-entered mid-filter. */
+	let modelToolsSyncInFlight = false;
 	let rebindGate: RebindGate = { inFlight: false, lastAttemptAt: 0, failStreak: 0 };
 	let onboardingTimer: TimerHandle | null = null;
 	let onboardingInFlight = false;
@@ -134,6 +143,43 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 	}
 
 	/** Footer status bar (ctx.ui.setStatus) — always-visible chrome, not chat. */
+	/**
+	 * Single-outbound when host cannot co-bind: hide mute-trap host tools from the model.
+	 * When hostSeatBound, re-enable them. Best-effort — setActiveTools may be unavailable early.
+	 */
+	async function syncModelToolsForSeat(): Promise<void> {
+		if (modelToolsSyncInFlight) return;
+		modelToolsSyncInFlight = true;
+		try {
+			const active = typeof pi.getActiveTools === "function" ? pi.getActiveTools() : [];
+			const all = typeof pi.getAllTools === "function" ? pi.getAllTools() : active;
+			if (!Array.isArray(active) || active.length === 0) return;
+			let next = filterActiveToolsForSeat({
+				active,
+				hostSeatBound,
+				pluginSeatHeld: seatHeldExclusive,
+			});
+			if (hostSeatBound) {
+				next = mergeHostToolsWhenBound({ active: next, all, hostSeatBound: true });
+			}
+			const same =
+				next.length === active.length && next.every((n, i) => n === active[i]);
+			if (same) return;
+			if (typeof pi.setActiveTools === "function") {
+				await pi.setActiveTools(next);
+			}
+		} catch {
+			// Non-fatal: guidance + tool_call block still protect the mute path.
+		} finally {
+			modelToolsSyncInFlight = false;
+		}
+	}
+
+	async function applyHostBindResult(outcome: { ok: boolean; detail: string }): Promise<void> {
+		hostSeatBound = outcome.ok;
+		hostBindDetail = outcome.detail;
+		await syncModelToolsForSeat();
+	}
 	function refreshStatusSurface(ctx?: ExtensionContext | null) {
 		const target = ctx ?? liveCtx;
 		if (!target?.hasUI) return;
@@ -307,6 +353,8 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		if (agentId && state.selfAgentId && agentId !== state.selfAgentId) return;
 		seatHeldExclusive = false;
 		hostSeatBound = false;
+		hostBindDetail = "seat preempted";
+		void syncModelToolsForSeat();
 		heartbeatOk = false;
 		if (liveCtx) clearTimer(liveCtx);
 		const next = applySeatPreempted(state, agentId);
@@ -538,7 +586,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		});
 		seatHeldExclusive = true;
 		// Co-bind host MCP connection with the same session_key (best-effort; no room_watch).
-		hostSeatBound = await bindHostAgentSeat(registerArgs);
+		await applyHostBindResult(await bindHostAgentSeat(registerArgs));
 		heartbeatOk = false; // next heartbeatTick flips online
 		rebindGate = { inFlight: false, lastAttemptAt: rebindGate.lastAttemptAt, failStreak: 0 };
 		return true;
@@ -628,7 +676,10 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 						deliveryMode: mode,
 						sessionKey: state.sessionKey,
 					});
-					hostSeatBound = await bindHostAgentSeat(args);
+					await applyHostBindResult(await bindHostAgentSeat(args));
+				} else {
+					// Keep model tool surface honest even when already bound/unbound.
+					await syncModelToolsForSeat();
 				}
 				// Clear soft rebind noise once presence is healthy.
 				if (state.lastError && /rebind|heartbeat|agent_not_bound|agent_register|seat taken/i.test(state.lastError)) {
@@ -643,6 +694,8 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 			if (decision.action === "stop_revoked") {
 				seatHeldExclusive = false;
 				hostSeatBound = false;
+				hostBindDetail = "agent revoked";
+				void syncModelToolsForSeat();
 				persist({
 					...state,
 					selfAgentId: null,
@@ -884,6 +937,17 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		}
 	});
 
+	// Block host mute-trap tools if they remain active despite setActiveTools filter.
+	pi.on("tool_call", (event) => {
+		if (!seatHeldExclusive || hostSeatBound) return;
+		if (!isHostHuddoraMuteTrapTool(event.toolName)) return;
+		return {
+			block: true,
+			reason:
+				"Host mcp__huddora_message_send is unbound while the plugin holds the seat (host MCP is a different session; dual-package OMP often cannot co-bind). Use plugin tool huddora_message_send instead. /huddora doctor shows Host seat status.",
+		};
+	});
+
 
 
 	const { z } = pi.zod;
@@ -892,7 +956,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		name: "huddora_message_send",
 		label: "Huddora message send",
 		description:
-			"Send a room message via the plugin-bound bridge session (the same seat as footer online). Prefer this over host mcp__huddora_message_send / message_send — host MCP is a different unbound session and returns agent_not_bound by design when the plugin holds the seat. Do not use by default for local OMP chat; only when the user asked to post/notify/reply in the room or context clearly requires a room reply (inbound huddora_event, tell the room, etc.).",
+			"Send a room message via the plugin-bound bridge session (the same seat as footer Here). Required model send path when doctor Host seat is unbound. Host mcp__huddora_message_send is only valid when Host seat: bound; otherwise it is hidden as a mute-online trap. Do not use by default for local OMP chat; only when the user asked to post/notify/reply in the room or context clearly requires a room reply (inbound huddora_event, tell the room, etc.).",
 		loadMode: "essential",
 		approval: "write",
 		parameters: z.object({
@@ -1006,7 +1070,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 					const roomLine = formatBoundRoomLine(state.roomId, state.roomName) ?? "Room: none";
 					const stamp = state.lastExtensionVersion ?? "none";
 					ctx.ui.notify(
-						`Huddora doctor\nLoaded plugin: v${PLUGIN_VERSION} (this OMP process)\nLast seat stamp: ${stamp}\nHost agent_list extension_version = last successful agent_register from loaded plugin — not the web UI.\nAfter plugin upgrade: full OMP process restart (not only /huddora connect), then reauth if needed.\nPlugin: ${connection}\nSession: ${bridge ? "active" : "not started"}\nConfig: ${config.ok ? (config.exists ? "valid" : "missing") : config.error}\n${roomLine}\nDelivery: ${deliveryLabel}\nNext: ${next}`,
+						`Huddora doctor\nLoaded plugin: v${PLUGIN_VERSION} (this OMP process)\nLast seat stamp: ${stamp}\nHost agent_list extension_version = last successful agent_register from loaded plugin — not the web UI.\nAfter plugin upgrade: full OMP process restart (not only /huddora connect), then reauth if needed.\nPlugin: ${connection}\nSession: ${bridge ? "active" : "not started"}\n${formatHostSeatDoctorLine({ hostSeatBound, lastBindDetail: hostBindDetail })}\nConfig: ${config.ok ? (config.exists ? "valid" : "missing") : config.error}\n${roomLine}\nDelivery: ${deliveryLabel}\nNext: ${next}`,
 						state.roomId || transportReady ? "info" : "warning",
 					);
 					return;
@@ -1117,9 +1181,13 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 					setCompatibilityBridge(null);
 					delivery = "unavailable";
 					heartbeatOk = false;
+					seatHeldExclusive = false;
+					hostSeatBound = false;
+					hostBindDetail = "disconnected";
 					persist(defaultState());
 					injectedCursors.clear();
 					rateGuard = defaultRateGuard();
+					await syncModelToolsForSeat();
 					refreshStatusSurface(ctx);
 					ctx.ui.notify("Disconnected.", "info");
 					return;

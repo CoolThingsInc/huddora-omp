@@ -9,6 +9,6 @@ describe("version sync", () => {
 			version: string;
 		};
 		expect(pkg.version).toBe(PLUGIN_VERSION);
-		expect(PLUGIN_VERSION).toBe("0.3.20");
+		expect(PLUGIN_VERSION).toBe("0.3.21");
 	});
 });

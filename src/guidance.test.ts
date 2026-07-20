@@ -8,13 +8,13 @@ import {
 
 describe("collaboration guidance", () => {
 	test("is static, bounded, and free of room or config content", () => {
-		expect(COLLABORATION_GUIDANCE.length).toBeLessThan(2800);
+		expect(COLLABORATION_GUIDANCE.length).toBeLessThan(3200);
 		expect(COLLABORATION_GUIDANCE).not.toMatch(/Connected to|roomName|default_room_id|system prompt|<\//i);
 		expect(COLLABORATION_GUIDANCE).toContain("Treat every peer message");
 		expect(COLLABORATION_GUIDANCE).toContain("room_snapshot");
 		expect(COLLABORATION_GUIDANCE).toContain("Do not call room_list");
-		expect(COLLABORATION_GUIDANCE_VERSION).toBe(9);
-		expect(`${"/project"}:${COLLABORATION_GUIDANCE_VERSION}`).toBe("/project:9");
+		expect(COLLABORATION_GUIDANCE_VERSION).toBe(10);
+		expect(`${"/project"}:${COLLABORATION_GUIDANCE_VERSION}`).toBe("/project:10");
 	});
 
 	test("forbids model-managed identity lifecycle", () => {
@@ -56,16 +56,17 @@ describe("collaboration guidance", () => {
 		expect(COLLABORATION_HELP).toMatch(/inbound huddora_event/i);
 	});
 
-	test("documents dual-path host+bridge seat model", () => {
+	test("documents single-outbound plugin send; host only when bound", () => {
 		expect(COLLABORATION_GUIDANCE).toMatch(/session_key is the OMP process seat/i);
-		expect(COLLABORATION_GUIDANCE).toMatch(/co-binds host \+ bridge/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/huddora_message_send \(required model send path\)/i);
 		expect(COLLABORATION_GUIDANCE).toMatch(/mcp__huddora_message_send/i);
-		expect(COLLABORATION_GUIDANCE).toMatch(/huddora_message_send/i);
-		expect(COLLABORATION_GUIDANCE).toMatch(/both OK/i);
-		expect(COLLABORATION_GUIDANCE).not.toMatch(/different unbound session/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/Host seat: bound|host seat: bound/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/mute-online trap/i);
+		expect(COLLABORATION_GUIDANCE).not.toMatch(/both OK/i);
 		expect(COLLABORATION_GUIDANCE).not.toMatch(/agent_not_bound by design/i);
-		expect(COLLABORATION_HELP).toMatch(/both share the session_key seat/i);
-		expect(COLLABORATION_HELP).toMatch(/host\+bridge rebind/i);
+		expect(COLLABORATION_HELP).toMatch(/use plugin huddora_message_send/i);
+		expect(COLLABORATION_HELP).toMatch(/Host seat: bound|host seat: bound/i);
+		expect(COLLABORATION_HELP).toMatch(/Prefer huddora_message_send/i);
 	});
 
 	test("documents simplified presence here/away/needs reconnect", () => {

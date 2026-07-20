@@ -1,7 +1,8 @@
 /**
  * Pure helpers for the plugin-bound huddora_message_send tool.
- * Model-facing send must go through the plugin bridge session (bound seat),
- * not host mcp__huddora_message_send (different unbound session).
+ * Model-facing send uses the plugin bridge session (bound seat).
+ * Host mcp__huddora_message_send is only co-owned when host seat bind succeeds;
+ * otherwise it is a mute-online trap and is hidden from the model surface.
  */
 
 export type MessageSendParams = {
