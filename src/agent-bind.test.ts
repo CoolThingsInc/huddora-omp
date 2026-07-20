@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
+	buildAgentRegisterArgs,
 	canAttemptRebind,
 	decideHeartbeatFailure,
 	isAgentRevokedError,
 	isAgentUnboundError,
 	mcpToolFailureMessage,
+	needsVersionReregister,
 	type RebindGate,
 } from "./agent-bind";
 
@@ -161,5 +163,48 @@ describe("unbound → auto rebind → heartbeat succeeds", () => {
 		expect(decideHeartbeatFailure("agent_not_bound", gate, t + 1_000).action).toBe("record_error");
 		// after 10s ok
 		expect(decideHeartbeatFailure("agent_not_bound", gate, t + 10_000).action).toBe("rebind");
+	});
+});
+
+describe("needsVersionReregister", () => {
+	test("missing or mismatched stamp forces re-register", () => {
+		expect(needsVersionReregister(null, "0.3.9")).toBe(true);
+		expect(needsVersionReregister(undefined, "0.3.9")).toBe(true);
+		expect(needsVersionReregister("0.3.7", "0.3.9")).toBe(true);
+		expect(needsVersionReregister("0.3.9", "0.3.9")).toBe(false);
+	});
+});
+
+describe("buildAgentRegisterArgs", () => {
+	const base = {
+		agentDisplayName: "Cabinet Name",
+		selfDisplayName: "Ruslan",
+		pluginVersion: "0.3.9",
+		deliveryMode: "mcp_push" as const,
+		sessionKey: "seat-uuid",
+	};
+
+	test("first create sends display_name default", () => {
+		const args = buildAgentRegisterArgs({ ...base, selfAgentId: null, agentDisplayName: null });
+		expect(args.display_name).toBe("Ruslan's OMP");
+		expect(args.extension_version).toBe("0.3.9");
+		expect(args.session_key).toBe("seat-uuid");
+		expect(args.harness).toBe("omp");
+	});
+
+	test("rebind omits display_name so cabinet rename survives", () => {
+		const args = buildAgentRegisterArgs({
+			...base,
+			selfAgentId: "agent-uuid",
+		});
+		expect(args).not.toHaveProperty("display_name");
+		expect(args.extension_version).toBe("0.3.9");
+		expect(args.delivery_mode).toBe("mcp_push");
+		expect(args.session_key).toBe("seat-uuid");
+	});
+
+	test("first create prefers agentDisplayName when set", () => {
+		const args = buildAgentRegisterArgs({ ...base, selfAgentId: null });
+		expect(args.display_name).toBe("Cabinet Name");
 	});
 });

@@ -47,6 +47,16 @@ describe("pause durable", () => {
 	});
 });
 
+describe("lastExtensionVersion durable", () => {
+	test("round-trip and missing defaults null", () => {
+		const parsed = parseState(
+			toDurable({ ...defaultState(), lastExtensionVersion: "0.3.9", selfAgentId: "a" }),
+		);
+		expect(parsed?.lastExtensionVersion).toBe("0.3.9");
+		expect(parseState({ roomId: "r" })?.lastExtensionVersion).toBe(null);
+	});
+});
+
 describe("backoff", () => {
 	test("grows", () => {
 		const d0 = nextPollDelayMs({ ...defaultState(), errorStreak: 0 }, 1000, 8000, () => 1);

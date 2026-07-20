@@ -9,9 +9,11 @@
  */
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import {
+	buildAgentRegisterArgs,
 	canAttemptRebind,
 	decideHeartbeatFailure,
 	isAgentUnboundError,
+	needsVersionReregister,
 	type RebindGate,
 } from "./agent-bind";
 
@@ -37,6 +39,7 @@ import {
 	formatStatusLine,
 	formatStatusReport,
 	STATUS_KEY,
+	type StatusTheme,
 } from "./status-surface";
 import { UnsafeHuddoraBridge, type UnsafeBridgeResult } from "./unsafe-bridge";
 import {
@@ -123,32 +126,17 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 	function refreshStatusSurface(ctx?: ExtensionContext | null) {
 		const target = ctx ?? liveCtx;
 		if (!target?.hasUI) return;
-		const themed = (text: string) => {
-			try {
-				const theme = target.ui.theme;
-				const presence = derivePresence({
-					selfAgentId: state.selfAgentId,
-					lastError: state.lastError,
-					heartbeatOk,
-					bridgeReady: Boolean(bridge),
-				});
-				const color =
-					presence === "online"
-						? "success"
-						: presence === "revoked"
-							? "error"
-							: presence === "offline"
-								? "warning"
-								: "dim";
-				return theme.fg(color, text);
-			} catch {
-				return text;
-			}
-		};
 		// connection label is cheap/sync-ish via bridge presence; full getHuddoraConnectionStatus is async.
 		const connection = bridge ? "bridge" : "bridge_missing";
-		const line = formatStatusLine(buildStatusInput(connection));
-		target.ui.setStatus(STATUS_KEY, themed(line));
+		const input = buildStatusInput(connection);
+		let line: string;
+		try {
+			const theme = target.ui.theme as StatusTheme;
+			line = formatStatusLine(input, theme);
+		} catch {
+			line = formatStatusLine(input);
+		}
+		target.ui.setStatus(STATUS_KEY, line);
 	}
 
 	function persist(next: HuddoraPluginState) {
@@ -475,17 +463,17 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 
 	async function callRegister(): Promise<boolean> {
 		const sessionKey = await ensureSessionKey({ fallback: state.sessionKey });
-		const res = await huddoraCall("agent_register", {
-			display_name: state.agentDisplayName
-				? state.agentDisplayName
-				: state.selfDisplayName
-					? `${state.selfDisplayName}'s OMP`
-					: "OMP agent",
-			harness: "omp",
-			extension_version: PLUGIN_VERSION,
-			delivery_mode: delivery === "bridge" ? "mcp_push" : "poll",
-			session_key: sessionKey,
-		});
+		const res = await huddoraCall(
+			"agent_register",
+			buildAgentRegisterArgs({
+				selfAgentId: state.selfAgentId,
+				agentDisplayName: state.agentDisplayName,
+				selfDisplayName: state.selfDisplayName,
+				pluginVersion: PLUGIN_VERSION,
+				deliveryMode: delivery === "bridge" ? "mcp_push" : "poll",
+				sessionKey,
+			}),
+		);
 		if (!res.ok || !res.data || typeof res.data !== "object") {
 			// Soft fail — do not leave "call agent_register first" as user-facing stuck state.
 			const msg = res.ok === false ? res.message : "agent_register_failed";
@@ -500,6 +488,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 			selfAgentId: id,
 			sessionKey,
 			agentDisplayName: typeof name === "string" ? name : state.agentDisplayName,
+			lastExtensionVersion: PLUGIN_VERSION,
 			lastError: null,
 		});
 		rebindGate = { inFlight: false, lastAttemptAt: rebindGate.lastAttemptAt, failStreak: 0 };
@@ -540,7 +529,10 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		}
 	}
 
-	/** Always re-register on start for hub rebind; session_key keeps the install seat. */
+	/**
+	 * Start/hub rebind: always agent_register so host session gets seat + version stamp.
+	 * session_key keeps the install seat; display_name omitted when already bound.
+	 */
 	async function ensureAgentRegistered(): Promise<void> {
 		await rebindAgent({ force: true });
 	}
@@ -561,7 +553,10 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		heartbeatInFlight = true;
 		try {
 			const mode = delivery === "bridge" ? "mcp_push" : "poll";
-			if (!state.selfAgentId) {
+			if (
+				!state.selfAgentId ||
+				needsVersionReregister(state.lastExtensionVersion, PLUGIN_VERSION)
+			) {
 				if (await rebindAgent({ force: true })) {
 					if (liveCtx) scheduleHeartbeat(liveCtx);
 				}
@@ -635,6 +630,8 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 			heartbeatTimer = null;
 		}
 		if (shutdown || !state.selfAgentId) return;
+		// First heartbeat immediately so footer flips online after upgrade/rebind.
+		void heartbeatTick();
 		heartbeatTimer = ctx.setInterval(() => {
 			void heartbeatTick();
 		}, HEARTBEAT_MS);

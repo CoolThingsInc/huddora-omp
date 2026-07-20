@@ -1,6 +1,8 @@
 /**
  * Always-visible Huddora status (OMP footer via ctx.ui.setStatus).
  * Pure formatters — extension owns IO and when to refresh.
+ *
+ * setStatus only takes a string; color via theme.fg when available.
  */
 
 export const STATUS_KEY = "huddora";
@@ -20,6 +22,11 @@ export type StatusSurfaceInput = {
 	bridgeActive: boolean;
 	connection: string;
 	lastError: string | null;
+};
+
+/** Minimal theme surface used for segmented footer coloring. */
+export type StatusTheme = {
+	fg: (color: string, text: string) => string;
 };
 
 /** Honest presence from seat + last heartbeat/bridge signals. */
@@ -54,21 +61,61 @@ function agentLabel(agentDisplayName: string | null, selfAgentId: string | null)
 	return "unbound";
 }
 
+// Nerd Font glyphs (Codicons/Material/Octicons set common in OMP terminals).
+const I = {
+	brand: "󰒍", // nf-md-broadcast
+	agent: "", // nf-oct-person
+	room: "󰭹", // nf-md-message-text
+	pause: "⏸",
+} as const;
+
+const PRESENCE: Record<
+	Presence,
+	{ icon: string; label: string; color: "success" | "warning" | "error" | "dim" }
+> = {
+	online: { icon: "●", label: "online", color: "success" },
+	offline: { icon: "○", label: "offline", color: "warning" },
+	needs_setup: { icon: "⚠", label: "needs setup", color: "dim" },
+	revoked: { icon: "󰅙", label: "revoked", color: "error" },
+};
+
+export function presenceThemeColor(presence: Presence): "success" | "warning" | "error" | "dim" {
+	return PRESENCE[presence].color;
+}
+
 /**
- * One-line footer/status bar text (plain; theme applied by caller when wanted).
- * Always glanceable: version · presence · agent · room.
+ * One-line footer/status bar. Glanceable: brand · presence · agent · room.
+ * Pass theme for segmented colors; plain string (icons only) without it.
  */
-export function formatStatusLine(input: StatusSurfaceInput): string {
+export function formatStatusLine(input: StatusSurfaceInput, theme?: StatusTheme): string {
+	const p = PRESENCE[input.presence];
 	const agent = agentLabel(input.agentDisplayName, input.selfAgentId);
 	const room = roomLabel(input.roomId, input.roomName);
-	const pause = input.paused ? " · paused" : "";
-	return `Huddora v${input.pluginVersion} · ${input.presence} · ${agent} · ${room}${pause}`;
+	const brand = `${I.brand} Huddora ${input.pluginVersion}`;
+	const presence = `${p.icon} ${p.label}`;
+	const agentPart = `${I.agent} ${agent}`;
+	const roomPart = `${I.room} ${room}`;
+	const pausePart = input.paused ? `${I.pause} paused` : "";
+
+	if (!theme) {
+		return [brand, presence, agentPart, roomPart, pausePart].filter(Boolean).join("  ");
+	}
+
+	const parts = [
+		theme.fg("accent", brand),
+		theme.fg(p.color, presence),
+		theme.fg("muted", agentPart),
+		theme.fg("muted", roomPart),
+	];
+	if (pausePart) parts.push(theme.fg("warning", pausePart));
+	return parts.join("  ");
 }
 
 /**
  * Multi-line /huddora status body (plugin-owned, not LLM).
  */
 export function formatStatusReport(input: StatusSurfaceInput): string {
+	const p = PRESENCE[input.presence];
 	const agent = agentLabel(input.agentDisplayName, input.selfAgentId);
 	const room = roomLabel(input.roomId, input.roomName);
 	const roomIdLine = input.roomId
@@ -82,10 +129,11 @@ export function formatStatusReport(input: StatusSurfaceInput): string {
 		: input.roomId
 			? "Ready."
 			: "Next: /huddora room";
+	const pause = input.paused ? `  ${I.pause} paused` : "";
 	return [
-		`Huddora v${input.pluginVersion} · ${input.presence}${input.paused ? " · paused" : ""}`,
-		`Agent: ${agent}${input.selfAgentId ? " (registered)" : " (not registered)"}`,
-		`Room: ${room}`,
+		`${I.brand} Huddora ${input.pluginVersion}  ${p.icon} ${p.label}${pause}`,
+		`${I.agent} Agent: ${agent}${input.selfAgentId ? " (registered)" : " (not registered)"}`,
+		`${I.room} Room: ${room}`,
 		roomIdLine,
 		`Plugin: ${input.connection}; delivery: ${input.delivery}; session: ${session}.`,
 		next,

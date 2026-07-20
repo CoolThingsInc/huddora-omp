@@ -21,6 +21,8 @@ export type HuddoraPluginState = {
 	/** Install seat backup only; primary is ~/.config/huddora/session_key. */
 	sessionKey: string | null;
 	agentDisplayName: string | null;
+	/** Last PLUGIN_VERSION successfully stamped via agent_register. */
+	lastExtensionVersion: string | null;
 	lastError: string | null;
 	lastSyncAt: string | null;
 	/** Consecutive empty/error polls for backoff. */
@@ -81,7 +83,7 @@ export type RoomListItem = {
 export const CUSTOM_STATE_TYPE = "huddora-state";
 export const CUSTOM_MSG_TYPE = "huddora-chat";
 export const MCP_SERVER = "huddora";
-export const PLUGIN_VERSION = "0.3.8";
+export const PLUGIN_VERSION = "0.3.10";
 
 /** Max messages injected per poll/sync (bounded context). */
 export const INJECT_LIMIT = 40;
@@ -110,6 +112,7 @@ export function defaultState(): HuddoraPluginState {
 		selfAgentId: null,
 		sessionKey: null,
 		agentDisplayName: null,
+		lastExtensionVersion: null,
 		lastError: null,
 		lastSyncAt: null,
 		emptyStreak: 0,

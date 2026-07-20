@@ -82,3 +82,39 @@ export function mcpToolFailureMessage(result: unknown): string | null {
 	}
 	return "MCP tool error";
 }
+
+/** Force agent_register when install version is newer than last stamped seat. */
+export function needsVersionReregister(
+	lastExtensionVersion: string | null | undefined,
+	pluginVersion: string,
+): boolean {
+	return !lastExtensionVersion || lastExtensionVersion !== pluginVersion;
+}
+
+/**
+ * agent_register args. Omit display_name on rebind so cabinet renames survive.
+ * Only first create (no selfAgentId yet) sets a default name.
+ */
+export function buildAgentRegisterArgs(input: {
+	selfAgentId: string | null;
+	agentDisplayName: string | null;
+	selfDisplayName: string | null;
+	pluginVersion: string;
+	deliveryMode: "mcp_push" | "poll";
+	sessionKey: string;
+}): Record<string, unknown> {
+	const args: Record<string, unknown> = {
+		harness: "omp",
+		extension_version: input.pluginVersion,
+		delivery_mode: input.deliveryMode,
+		session_key: input.sessionKey,
+	};
+	if (!input.selfAgentId) {
+		args.display_name = input.agentDisplayName
+			? input.agentDisplayName
+			: input.selfDisplayName
+				? `${input.selfDisplayName}'s OMP`
+				: "OMP agent";
+	}
+	return args;
+}
