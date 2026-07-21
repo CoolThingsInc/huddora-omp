@@ -88,7 +88,7 @@ export type RoomListItem = {
 export const CUSTOM_STATE_TYPE = "huddora-state";
 export const CUSTOM_MSG_TYPE = "huddora-chat";
 export const MCP_SERVER = "huddora";
-export const PLUGIN_VERSION = "0.3.24";
+export const PLUGIN_VERSION = "0.3.25";
 
 /** Max messages injected per poll/sync (bounded context). */
 export const INJECT_LIMIT = 40;
@@ -100,6 +100,8 @@ export const POLL_BASE_MS = 8_000;
 export const POLL_MAX_MS = 60_000;
 /** Heartbeat period while connected. */
 export const HEARTBEAT_MS = 30_000;
+/** Courier reclaim cadence: server lease TTL 120s; reclaim under half its TTL. */
+export const COURIER_RECLAIM_MS = 60_000;
 
 export function defaultState(): HuddoraPluginState {
 	return {

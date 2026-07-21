@@ -45,6 +45,17 @@ export {
 	type StatusSurfaceInput,
 } from "./status-surface";
 export {
+	type DeliveryLight,
+	type DeliveryLightInput,
+	deliveryLight,
+	isCourierPrimary,
+	PUSH_STARTUP_GRACE_MS,
+	PUSH_STALE_MS,
+	recoveryPollBaseMs,
+	shouldUsePollRecovery,
+	type ShouldUsePollRecoveryInput,
+} from "./delivery-health";
+export {
 	advanceCursor,
 	markEmpty,
 	markError,
@@ -54,6 +65,7 @@ export {
 	toDurable,
 } from "./state";
 export {
+	COURIER_RECLAIM_MS,
 	CUSTOM_MSG_TYPE,
 	CUSTOM_STATE_TYPE,
 	defaultState,

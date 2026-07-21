@@ -21,14 +21,12 @@ import {
 } from "./agent-bind";
 
 import {
-	boundBatchForInject,
 	DEBOUNCE_MS,
 	defaultRateGuard,
 	gateInject,
 	type RateGuardState,
 } from "./deliver";
 import { COLLABORATION_GUIDANCE, COLLABORATION_GUIDANCE_VERSION, COLLABORATION_HELP, formatBoundRoomLine } from "./guidance";
-import { boundMessages, filterOwnMessages, formatRoomChatInjection, maxCursor } from "./format";
 import {
 	callHuddoraTool,
 	getHuddoraConnectionStatus,
@@ -36,7 +34,7 @@ import {
 	setPluginBridge,
 } from "./mcp-client";
 import { parseHuddoraAgentNotification, parseHuddoraMessagesNotification } from "./notifications";
-import { advanceCursor, markError, nextPollDelayMs, restoreStateFromBranch } from "./state";
+import { markError, nextPollDelayMs, restoreStateFromBranch } from "./state";
 import {
 	derivePresence,
 	formatStatusLine,
@@ -55,6 +53,13 @@ import {
 import { bootstrapRoom, durablePayload, longPollWaitMs, pullAndFormat } from "./sync";
 import { buildMessageSendArgs, formatMessageSendToolResult } from "./send-tool";
 import { bindHostAgentSeat } from "./host-seat";
+import {
+	deliveryLight as deriveDeliveryLight,
+	isCourierPrimary,
+	recoveryPollBaseMs,
+	shouldUsePollRecovery,
+	type DeliveryLight,
+} from "./delivery-health";
 import {
 	filterActiveToolsForSeat,
 	formatHostSeatDoctorLine,
@@ -75,11 +80,10 @@ import {
 	defaultState,
 	HEARTBEAT_MS,
 	type HuddoraPluginState,
-	INJECT_LIMIT,
 	PLUGIN_VERSION,
 	POLL_BASE_MS,
 	POLL_MAX_MS,
-	type RoomMessage,
+	COURIER_RECLAIM_MS,
 } from "./types";
 
 type TimerHandle = ReturnType<ExtensionContext["setInterval"]>;
@@ -89,15 +93,12 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 
 	let state: HuddoraPluginState = defaultState();
 	let timer: TimerHandle | null = null;
-	let debounceTimer: TimerHandle | null = null;
 	let heartbeatTimer: TimerHandle | null = null;
 	let inFlight = false;
 	let shutdown = false;
 	let nextDueAt = 0;
 	let delivery: "poll" | "bridge" | "unavailable" | "unknown" = "unknown";
 	const injectedCursors = new Set<number>();
-	let pendingBatch: RoomMessage[] = [];
-	let pendingNextCursor: number | null = null;
 	let liveCtx: ExtensionContext | null = null;
 	let rateGuard: RateGuardState = defaultRateGuard();
 	let lastPushAt: number | null = null;
@@ -106,6 +107,15 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 	let heartbeatInFlight = false;
 	/** True while this process holds the agent seat (session_key co-own OK). */
 	let seatHeldExclusive = false;
+	/** Ephemeral lease metadata from room_watch (not durable across sessions). */
+	let leaseExpiresAt: number | null = null;
+	let leaseEpoch: number | null = null;
+	/** Dedicated reclaim timer calling ensureWatch on COURIER_RECLAIM_MS cadence. */
+	let reclaimTimer: TimerHandle | null = null;
+	/** Debounced wake timer curling a durable pull after an SSE push notification. */
+	let wakeTimer: TimerHandle | null = null;
+	/** Monotonic start of delivery for back-compat recovery proper grace window. */
+	let deliveryStartedAt = Date.now();
 	/** Host MCP agent_register succeeded for this process seat (best-effort). */
 	let hostSeatBound = false;
 	/** Last host bind diagnostic for doctor honesty. */
@@ -125,6 +135,14 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 			heartbeatOk: heartbeatOk && seatHeldExclusive,
 			bridgeReady: Boolean(bridge),
 		});
+		const bridgeReady = Boolean(bridge);
+		const light: DeliveryLight = deriveDeliveryLight({
+			bridgeReady,
+			leaseExpiresAt,
+			lastPushAt,
+			now: Date.now(),
+			reclaimMs: COURIER_RECLAIM_MS,
+		});
 		return {
 			pluginVersion: PLUGIN_VERSION,
 			lastExtensionVersion: state.lastExtensionVersion,
@@ -135,10 +153,13 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 			presence,
 			delivery,
 			paused: state.paused,
-			bridgeActive: Boolean(bridge),
+			bridgeActive: bridgeReady,
 			connection,
 			lastError: state.lastError,
 			seatExclusive: seatHeldExclusive && presence === "online",
+			deliveryLight: light,
+			leaseExpiresAt,
+			courierPrimary: isCourierPrimary(),
 		};
 	}
 
@@ -334,10 +355,6 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 			ctx.clearTimer(timer);
 			timer = null;
 		}
-		if (debounceTimer) {
-			ctx.clearTimer(debounceTimer);
-			debounceTimer = null;
-		}
 		if (heartbeatTimer) {
 			ctx.clearTimer(heartbeatTimer);
 			heartbeatTimer = null;
@@ -345,6 +362,14 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		if (onboardingTimer) {
 			ctx.clearTimer(onboardingTimer);
 			onboardingTimer = null;
+		}
+		if (reclaimTimer) {
+			ctx.clearTimer(reclaimTimer);
+			reclaimTimer = null;
+		}
+		if (wakeTimer) {
+			ctx.clearTimer(wakeTimer);
+			wakeTimer = null;
 		}
 	}
 
@@ -398,90 +423,8 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		return true;
 	}
 
-	function flushPending(ctx: ExtensionContext) {
-		if (debounceTimer) {
-			ctx.clearTimer(debounceTimer);
-			debounceTimer = null;
-		}
-		if (!state.roomId || state.paused || pendingBatch.length === 0) {
-			pendingBatch = [];
-			pendingNextCursor = null;
-			return;
-		}
-		let batch = filterOwnMessages(pendingBatch, state.selfUserId, state.selfAgentId);
-		batch = boundMessages(batch, INJECT_LIMIT);
-		batch = boundBatchForInject(batch);
-		const maxAll = maxCursor(pendingBatch);
-		const nextCursor = pendingNextCursor;
-		pendingBatch = [];
-		pendingNextCursor = null;
-
-		const advanced = advanceCursor(state, {
-			nextCursor,
-			maxMessageCursor: maxAll,
-		});
-
-		if (batch.length === 0) {
-			if (advanced.cursor !== state.cursor) persist(advanced);
-			return;
-		}
-
-		if (injectedCursors.has(advanced.cursor)) {
-			persist(advanced);
-			return;
-		}
-
-		const content = formatRoomChatInjection({
-			roomId: state.roomId,
-			roomName: state.roomName,
-			messages: batch,
-			cursorAfter: advanced.cursor,
-		});
-		const queued = queueInject(content, advanced.cursor, batch.length);
-		if (queued) {
-			injectedCursors.add(advanced.cursor);
-			persist(advanced);
-			ctx.ui.notify(`Huddora: +${batch.length} msg (cursor ${advanced.cursor})`, "info");
-		}
-	}
-
-	function enqueueMessages(
-		ctx: ExtensionContext,
-		messages: RoomMessage[],
-		nextCursor: number | null,
-	) {
-		if (!state.roomId || state.paused) return;
-		// Live path: drop self-echo immediately (defense-in-depth vs server fanout).
-		// Still honor next_cursor so we do not re-fetch own sends.
-		const peers = filterOwnMessages(messages, state.selfUserId, state.selfAgentId);
-		if (nextCursor !== null) {
-			pendingNextCursor =
-				pendingNextCursor === null ? nextCursor : Math.max(pendingNextCursor, nextCursor);
-		} else {
-			const m = maxCursor(messages);
-			if (m !== null) {
-				pendingNextCursor = pendingNextCursor === null ? m : Math.max(pendingNextCursor, m);
-			}
-		}
-		if (peers.length === 0) {
-			// Advance durable cursor without injecting.
-			const advanced = advanceCursor(state, {
-				nextCursor: pendingNextCursor,
-				maxMessageCursor: maxCursor(messages),
-			});
-			if (advanced.cursor !== state.cursor) {
-				pendingNextCursor = null;
-				persist(advanced);
-			}
-			return;
-		}
-		lastPushAt = Date.now();
-		pendingBatch.push(...peers);
-		if (debounceTimer) ctx.clearTimer(debounceTimer);
-		debounceTimer = ctx.setTimeout(() => {
-			flushPending(ctx);
-		}, DEBOUNCE_MS);
-	}
+	// Content inject only from durable pull path (pollTick + wake pull).
+	// SSE bodies and next_cursor never advance state.cursor.
 
 
 	async function ensureBridge(ctx: ExtensionContext): Promise<boolean> {
@@ -507,7 +450,10 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 				const parsed = parseHuddoraMessagesNotification(method, params);
 				if (!parsed || (state.roomId && parsed.roomId !== state.roomId)) return;
 				const c = liveCtx ?? ctx;
-				enqueueMessages(c, parsed.messages, parsed.nextCursor);
+				// Pure wake: never inject SSE bodies or trust next_cursor for watermark.
+				// Debounced durable pull is the sole inject authority.
+				lastPushAt = Date.now();
+				scheduleWakePull(c);
 			});
 			if (!started.ok) {
 				bridge = null;
@@ -772,9 +718,89 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		);
 		if (!res.ok) {
 			delivery = "poll";
+			// Lease lost or never granted; clear stale ephemeral lease metadata.
+			leaseExpiresAt = null;
+			leaseEpoch = null;
 			return;
 		}
 		delivery = "bridge";
+		// Parse ephemeral lease metadata from res.data (back-compat: fields optional).
+		const data = res.data as Record<string, unknown> | null;
+		if (data && typeof data === "object") {
+			const expiresRaw = Reflect.get(data, "expires_at");
+			if (typeof expiresRaw === "string") {
+				const parsed = Date.parse(expiresRaw);
+				if (Number.isFinite(parsed)) leaseExpiresAt = parsed;
+			} else if (typeof expiresRaw === "number" && Number.isFinite(expiresRaw)) {
+				leaseExpiresAt = expiresRaw;
+			}
+			const epochRaw = Reflect.get(data, "lease_epoch");
+			if (typeof epochRaw === "number" && Number.isFinite(epochRaw)) {
+				leaseEpoch = epochRaw;
+			} else if (typeof epochRaw === "string" && Number.isFinite(Number(epochRaw))) {
+				leaseEpoch = Number(epochRaw);
+			}
+		}
+	}
+
+	/**
+	 * Dedicated lease reclaim timer: re-arms room_watch on COURIER_RECLAIM_MS cadence
+	 * so the durable subscription lease stays fresh even when SSE pushes are quiet.
+	 */
+	function scheduleReclaim(ctx: ExtensionContext) {
+		if (reclaimTimer) {
+			ctx.clearTimer(reclaimTimer);
+			reclaimTimer = null;
+		}
+		if (shutdown || !state.roomId || state.paused) return;
+		reclaimTimer = ctx.setInterval(() => {
+			void ensureWatch();
+		}, COURIER_RECLAIM_MS);
+	}
+
+	/**
+	 * Debounced durable pull triggered by an SSE push notification.
+	 * Uses the SAME durable inject path as pollTick (pullAndFormat waitMs=0);
+	 * never trusts SSE next_cursor or message bodies to advance state.cursor.
+	 */
+	function scheduleWakePull(ctx: ExtensionContext) {
+		if (wakeTimer) {
+			ctx.clearTimer(wakeTimer);
+			wakeTimer = null;
+		}
+		if (shutdown || !state.roomId || state.paused) return;
+		wakeTimer = ctx.setTimeout(() => {
+			wakeTimer = null;
+			void durablePullAndInject(ctx);
+		}, DEBOUNCE_MS);
+	}
+
+	async function durablePullAndInject(ctx: ExtensionContext): Promise<void> {
+		if (inFlight || shutdown || !state.roomId || state.paused) return;
+		if (!(await ensureTransport(ctx))) {
+			delivery = "unavailable";
+			return;
+		}
+		inFlight = true;
+		try {
+			const outcome = await pullAndFormat(state, { waitMs: 0 });
+			if (outcome.kind === "injected") {
+				if (!injectedCursors.has(outcome.cursorAfter)) {
+					const queued = queueInject(outcome.content, outcome.cursorAfter, outcome.messageCount);
+					if (queued) {
+						injectedCursors.add(outcome.cursorAfter);
+						if (ctx.hasUI) ctx.ui.notify(`Huddora: +${outcome.messageCount} msg`, "info");
+					}
+				}
+				persist(outcome.state);
+			} else if (outcome.kind === "empty" || outcome.kind === "error") {
+				persist(outcome.state);
+			}
+		} catch (error) {
+			persist(markError(state, error instanceof Error ? error.message : String(error)));
+		} finally {
+			inFlight = false;
+		}
 	}
 
 	function schedulePoll(ctx: ExtensionContext, delayMs?: number) {
@@ -783,9 +809,19 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 			timer = null;
 		}
 		if (shutdown || !state.roomId || state.paused) return;
-		const base = delivery === "bridge" ? Math.max(POLL_BASE_MS * 4, 30_000) : POLL_BASE_MS;
+		const now = Date.now();
+		const bridgeBase = Math.max(POLL_BASE_MS * 4, 30_000);
+		const rawBase = delivery === "bridge" ? bridgeBase : POLL_BASE_MS;
+		const useRecovery = shouldUsePollRecovery({
+			delivery,
+			pushEnabled: state.pushEnabled,
+			lastPushAt,
+			startedAt: deliveryStartedAt,
+			now,
+		});
+		const base = recoveryPollBaseMs(useRecovery, rawBase);
 		const delay = delayMs ?? nextPollDelayMs(state, base, POLL_MAX_MS);
-		nextDueAt = Date.now() + delay;
+		nextDueAt = now + delay;
 		timer = ctx.setInterval(() => {
 			void pollTick(ctx);
 		}, delay);
@@ -806,9 +842,21 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		}
 		inFlight = true;
 		try {
-			const outcome = await pullAndFormat(state, {
-				waitMs: delivery === "poll" ? longPollWaitMs(false) : 0,
+			// Reclaim the durable lease each tick so room_watch stays fresh.
+			await ensureWatch();
+			const now = Date.now();
+			const useRecovery = shouldUsePollRecovery({
+				delivery,
+				pushEnabled: state.pushEnabled,
+				lastPushAt,
+				startedAt: deliveryStartedAt,
+				now,
 			});
+			// Poll density: long-poll when pure-poll or when SSE looks stale; waitMs=0
+			// when bridge push is healthy (just a quick durable confirm).
+			const waitMs =
+				delivery === "poll" || useRecovery ? (longPollWaitMs(false) ?? 0) : 0;
+			const outcome = await pullAndFormat(state, { waitMs });
 			if (outcome.kind === "injected") {
 				if (!injectedCursors.has(outcome.cursorAfter)) {
 					const queued = queueInject(outcome.content, outcome.cursorAfter, outcome.messageCount);
@@ -881,6 +929,9 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 		// Register first so room_watch / heartbeat never hit agent_not_bound on a fresh session.
 		await ensureAgentRegistered();
 		await ensureWatch();
+		// Lease reclaim cadence starts only after a successful ensureWatch attempt.
+		deliveryStartedAt = Date.now();
+		scheduleReclaim(ctx);
 		scheduleHeartbeat(ctx);
 		schedulePoll(ctx, 1_000);
 		refreshStatusSurface(ctx);
@@ -922,7 +973,7 @@ export default function huddoraExtension(pi: ExtensionAPI) {
 
 	pi.on("session_shutdown", async (_e, ctx) => {
 		shutdown = true;
-		flushPending(ctx);
+		// No SSE-body flush; durable pull is the sole inject authority.
 		clearTimer(ctx);
 		inFlight = false;
 		if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, undefined);

@@ -26,6 +26,12 @@ export type StatusSurfaceInput = {
 	lastError: string | null;
 	/** True when this process exclusively holds the agent seat and is online. */
 	seatExclusive?: boolean;
+	/** Courier delivery health hint: green/amber/red from lease freshness + bridge. */
+	deliveryLight?: "green" | "amber" | "red";
+	/** Epoch ms when the durable room_watch lease expires; null when unknown/unheld. */
+	leaseExpiresAt?: number | null;
+	/** True (default) when a courier owns durable wake: lease + SSE wake + poll fallback. */
+	courierPrimary?: boolean;
 };
 
 /** Minimal theme surface used for segmented footer coloring. */
@@ -90,6 +96,20 @@ const PRESENCE: Record<
 export function presenceThemeColor(presence: Presence): "success" | "warning" | "error" | "dim" {
 	return PRESENCE[presence].color;
 }
+const DELIVERY_LIGHT: Record<
+	"green" | "amber" | "red",
+	{ glyph: string; color: "success" | "warning" | "error" }
+> = {
+	green: { glyph: "🟢", color: "success" },
+	amber: { glyph: "🟡", color: "warning" },
+	red: { glyph: "🔴", color: "error" },
+};
+
+/** Remaining whole seconds until the lease expires; 0 when expired or unset. */
+function leaseTtlMs(expiresAt: number | null | undefined, now = Date.now()): number {
+	if (typeof expiresAt !== "number") return 0;
+	return Math.max(0, expiresAt - now);
+}
 
 /**
  * One-line footer/status bar. Glanceable: brand · presence · agent · room.
@@ -104,17 +124,20 @@ export function formatStatusLine(input: StatusSurfaceInput, theme?: StatusTheme)
 	const agentPart = `${I.agent} ${agent}`;
 	const roomPart = `${I.room} ${room}`;
 	const pausePart = input.paused ? `${I.pause} paused` : "";
+	const light = input.deliveryLight ? DELIVERY_LIGHT[input.deliveryLight] : null;
+	const lightPart = light ? light.glyph : "";
 
 	if (!theme) {
-		return [brand, presence, agentPart, roomPart, pausePart].filter(Boolean).join("  ");
+		return [brand, lightPart, presence, agentPart, roomPart, pausePart].filter(Boolean).join("  ");
 	}
 
-	const parts = [
-		theme.fg("accent", brand),
+	const parts: string[] = [theme.fg("accent", brand)];
+	if (light) parts.push(theme.fg(light.color, lightPart));
+	parts.push(
 		theme.fg(p.color, presence),
 		theme.fg("muted", agentPart),
 		theme.fg("muted", roomPart),
-	];
+	);
 	if (pausePart) parts.push(theme.fg("warning", pausePart));
 	return parts.join("  ");
 }
@@ -156,6 +179,15 @@ export function formatStatusReport(input: StatusSurfaceInput): string {
 			? `Next: ${errText}`
 			: "Next: /huddora connect";
 	const pause = input.paused ? `  ${I.pause} paused` : "";
+	const courier = input.courierPrimary !== false;
+	const busParts = ["Bus: courier-primary (lease + SSE wake + poll)"];
+	if (typeof input.leaseExpiresAt === "number") {
+		busParts.push(`lease_ttl=${Math.round(leaseTtlMs(input.leaseExpiresAt) / 1000)}s remaining`);
+	}
+	if (input.deliveryLight) {
+		busParts.push(`light=${input.deliveryLight}`);
+	}
+	const busLine = courier ? busParts.join("; ") : null;
 	return [
 		`${I.brand} Huddora ${input.pluginVersion}  ${p.icon} ${p.label}${pause}`,
 		versionNote,
@@ -164,6 +196,7 @@ export function formatStatusReport(input: StatusSurfaceInput): string {
 		`${I.room} Room: ${room}`,
 		roomIdLine,
 		`Plugin: ${input.connection}; delivery: ${input.delivery}; session: ${session}.`,
+		busLine,
 		next,
 	]
 		.filter((line): line is string => Boolean(line))

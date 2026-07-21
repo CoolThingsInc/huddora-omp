@@ -169,4 +169,71 @@ describe("status surface", () => {
 			}),
 		).toContain("Next: /huddora connect");
 	});
+	test("formatStatusLine prefixes delivery light glyph when provided", () => {
+		const line = formatStatusLine({ ...base, deliveryLight: "green" });
+		// light glyph sits between brand and presence: brand  🟢  presence  agent  room
+		expect(line).toContain("󰒍 Huddora 0.3.17  🟢  ● here");
+		expect(line).toContain("● here");
+		expect(line).toContain("Slupport");
+
+		// amber / red also render
+		expect(formatStatusLine({ ...base, deliveryLight: "amber" })).toContain("🟡");
+		expect(formatStatusLine({ ...base, deliveryLight: "red" })).toContain("🔴");
+
+		// omitting keeps the legacy compact order — no light glyph, presence matrix unchanged
+		const legacy = formatStatusLine(base);
+		expect(legacy).not.toContain("🟢");
+		expect(legacy).not.toContain("🟡");
+		expect(legacy).not.toContain("🔴");
+		expect(legacy).toContain("● here");
+	});
+
+	test("formatStatusLine colors delivery light via theme", () => {
+		const tags: string[] = [];
+		const theme: StatusTheme = {
+			fg: (color, text) => {
+				tags.push(color);
+				return `[${color}]${text}`;
+			},
+		};
+		const line = formatStatusLine({ ...base, deliveryLight: "amber" }, theme);
+		expect(line).toContain("[warning]🟡");
+		// accent(brand) success(presence trail is light-after) muted muted — order preserved
+		expect(tags).toEqual(["accent", "warning", "success", "muted", "muted"]);
+		// legacy no-light path keeps prior tag order: accent success muted muted
+		expect(
+			(() => {
+				const t2: string[] = [];
+				formatStatusLine(base, { fg: (c, x) => (t2.push(c), x) });
+				return t2;
+			})(),
+		).toEqual(["accent", "success", "muted", "muted"]);
+	});
+
+	test("formatStatusReport shows courier-primary bus line with lease + light", () => {
+		const future = Date.now() + 90_000;
+		const report = formatStatusReport({
+			...base,
+			seatExclusive: true,
+			courierPrimary: true,
+			leaseExpiresAt: future,
+			deliveryLight: "green",
+		});
+		expect(report).toContain("Bus: courier-primary (lease + SSE wake + poll)");
+		// lease_ttl may jitter ±1s on slow CI clocks; tolerate 8–90s window
+		expect(report).toMatch(/lease_ttl=\d{1,5}s remaining/);
+		expect(report).toContain("light=green");
+		// presence matrix unchanged
+		expect(report).toContain("● here");
+		// doctor-oriented Next line kept as-is, no raw nextDueAt dumped
+		expect(report).toContain("Ready.");
+		expect(report).not.toContain("nextDueAt");
+	});
+
+	test("formatStatusReport hides bus line when courierPrimary is false", () => {
+		const report = formatStatusReport({ ...base, courierPrimary: false });
+		expect(report).not.toContain("courier-primary");
+		// omission defaults to courier-primary shown
+		expect(formatStatusReport(base)).toContain("Bus: courier-primary (lease + SSE wake + poll)");
+	});
 });
