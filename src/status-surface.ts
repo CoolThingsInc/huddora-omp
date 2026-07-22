@@ -1,9 +1,37 @@
 /**
- * Always-visible Huddora status (OMP footer via ctx.ui.setStatus).
- * Pure formatters — extension owns IO and when to refresh.
+ * Backward-compatible facade over the new pure modules (hud + presentation).
  *
- * setStatus only takes a string; color via theme.fg when available.
+ * The legacy public exports stay alive so extension.ts and existing callers keep
+ * compiling: `Presence`, `StatusSurfaceInput`, `StatusTheme`, `derivePresence`,
+ * `formatStatusLine`, `formatStatusReport`, `presenceThemeColor`, `STATUS_KEY`.
+ *
+ * Rendering is now delegated:
+ *   - `formatStatusLine`      → hud.deriveHudModel + hud.formatHudStatusFallback
+ *     (one-line, ANSI-free — OMP strips ANSI in setStatus, so the theme
+ *     parameter is accepted for signature compatibility but intentionally
+ *     unused here).
+ *   - `formatStatusWidgetLines` → hud.deriveHudModel + hud.formatHudWidgetLines
+ *     (2–3 lines for ctx.ui.setWidget, themed when a theme is passed).
+ *   - `formatStatusReport`    → presentation.formatHumanStatus via
+ *     `toHumanStatusInput` (clean lobby card, no operator jargon).
+ *
+ * `derivePresence` and `presenceThemeColor` keep their original behavior — the
+ * presence matrix is the single source of truth for here/away/needs_setup/revoked.
  */
+
+import {
+	deriveHudModel,
+	formatHudStatusFallback,
+	formatHudWidgetLines,
+	type HudInput,
+	type HudTheme,
+} from "./hud";
+import {
+	formatHumanStatus,
+	type HumanStatusInput,
+	type ConfigStatus,
+	type DeliveryLight,
+} from "./presentation";
 
 export const STATUS_KEY = "huddora";
 
@@ -51,154 +79,116 @@ export function derivePresence(input: {
 	if (!input.selfAgentId) return "needs_setup";
 	if (input.bridgeReady && input.heartbeatOk) return "online";
 	// Seat exists but this surface cannot send (rebind/preempt/unbound) → needs reconnect.
-	if (/rebind|preempt|agent_not_bound|seat taken|not bound|unbound/.test(err)) {
+	if (/rebind|preempt|agent_not_bound|seat taken|not bound|unbound|another window/.test(err)) {
 		return "needs_setup";
 	}
 	return "offline";
 }
 
-function shortRoomId(roomId: string): string {
-	return roomId.length > 12 ? `${roomId.slice(0, 8)}…` : roomId;
-}
-
-function roomLabel(roomId: string | null, roomName: string | null): string {
-	if (!roomId) return "no room";
-	const name = roomName?.trim();
-	if (name) return name;
-	return shortRoomId(roomId);
-}
-
-function agentLabel(agentDisplayName: string | null, selfAgentId: string | null): string {
-	const name = agentDisplayName?.trim();
-	if (name) return name;
-	if (selfAgentId) return shortRoomId(selfAgentId);
-	return "unbound";
-}
-
-// Nerd Font glyphs (Codicons/Material/Octicons set common in OMP terminals).
-const I = {
-	brand: "󰒍", // nf-md-broadcast
-	agent: "", // nf-oct-person
-	room: "󰭹", // nf-md-message-text
-	pause: "⏸",
-} as const;
-
 const PRESENCE: Record<
 	Presence,
-	{ icon: string; label: string; color: "success" | "warning" | "error" | "dim" }
+	{ color: "success" | "warning" | "error" | "dim" }
 > = {
-	online: { icon: "●", label: "here", color: "success" },
-	offline: { icon: "○", label: "away", color: "warning" },
-	needs_setup: { icon: "⚠", label: "needs reconnect", color: "dim" },
-	revoked: { icon: "󰅙", label: "revoked", color: "error" },
+	online: { color: "success" },
+	offline: { color: "warning" },
+	needs_setup: { color: "dim" },
+	revoked: { color: "error" },
 };
 
 export function presenceThemeColor(presence: Presence): "success" | "warning" | "error" | "dim" {
 	return PRESENCE[presence].color;
 }
-const DELIVERY_LIGHT: Record<
-	"green" | "amber" | "red",
-	{ glyph: string; color: "success" | "warning" | "error" }
-> = {
-	green: { glyph: "🟢", color: "success" },
-	amber: { glyph: "🟡", color: "warning" },
-	red: { glyph: "🔴", color: "error" },
-};
-
-/** Remaining whole seconds until the lease expires; 0 when expired or unset. */
-function leaseTtlMs(expiresAt: number | null | undefined, now = Date.now()): number {
-	if (typeof expiresAt !== "number") return 0;
-	return Math.max(0, expiresAt - now);
-}
 
 /**
- * One-line footer/status bar. Glanceable: brand · presence · agent · room.
- * Pass theme for segmented colors; plain string (icons only) without it.
+ * Map this surface's nullable lastError/connection vocabulary onto the
+ * presentation layer's `connection` enum. Diagnose keys on `disconnected` and
+ * `unavailable`; everything else falls through to presence-derived branches.
  */
-export function formatStatusLine(input: StatusSurfaceInput, theme?: StatusTheme): string {
-	const p = PRESENCE[input.presence];
-	const agent = agentLabel(input.agentDisplayName, input.selfAgentId);
-	const room = roomLabel(input.roomId, input.roomName);
-	const brand = `${I.brand} Huddora ${input.pluginVersion}`;
-	const presence = `${p.icon} ${p.label}`;
-	const agentPart = `${I.agent} ${agent}`;
-	const roomPart = `${I.room} ${room}`;
-	const pausePart = input.paused ? `${I.pause} paused` : "";
-	const light = input.deliveryLight ? DELIVERY_LIGHT[input.deliveryLight] : null;
-	const lightPart = light ? light.glyph : "";
-
-	if (!theme) {
-		return [brand, lightPart, presence, agentPart, roomPart, pausePart].filter(Boolean).join("  ");
+function mapConnection(input: StatusSurfaceInput): string {
+	switch (input.connection) {
+		case "bridge":
+		case "poll":
+			return "connected";
+		case "unavailable":
+			return "unavailable";
+		default:
+			// unknown / other — derive from presence so offline routes to the
+			// "Disconnected" branch rather than a healthy default.
+			return input.presence === "offline" ? "disconnected" : "connected";
 	}
-
-	const parts: string[] = [theme.fg("accent", brand)];
-	if (light) parts.push(theme.fg(light.color, lightPart));
-	parts.push(
-		theme.fg(p.color, presence),
-		theme.fg("muted", agentPart),
-		theme.fg("muted", roomPart),
-	);
-	if (pausePart) parts.push(theme.fg("warning", pausePart));
-	return parts.join("  ");
 }
 
 /**
- * Multi-line /huddora status body (plugin-owned, not LLM).
+ * Convert a legacy `StatusSurfaceInput` into a presentation `HumanStatusInput`.
+ *
+ * Config status is not modeled in the legacy input, so per the facade contract:
+ * `valid` when a room is bound, `missing` when no room (this routes the no-room
+ * case to the "No room bound" diagnosis rather than the "invalid config" one).
+ */
+export function toHumanStatusInput(input: StatusSurfaceInput): HumanStatusInput {
+	const configStatus: ConfigStatus = input.roomId ? "valid" : "missing";
+	const deliveryLight: DeliveryLight = input.deliveryLight ?? "green";
+	return {
+		pluginVersion: input.pluginVersion,
+		agentLabel: input.agentDisplayName,
+		agentId: input.selfAgentId,
+		roomLabel: input.roomName,
+		roomId: input.roomId,
+		presence: input.presence,
+		paused: input.paused,
+		connection: mapConnection(input),
+		configStatus,
+		lastError: input.lastError,
+		deliveryLight,
+	};
+}
+
+/** Build a `HudInput` from `StatusSurfaceInput` (drop legacy-only fields). */
+function toHudInput(input: StatusSurfaceInput): HudInput {
+	return {
+		pluginVersion: input.pluginVersion,
+		agentDisplayName: input.agentDisplayName,
+		selfAgentId: input.selfAgentId,
+		roomId: input.roomId,
+		roomName: input.roomName,
+		presence: input.presence,
+		paused: input.paused,
+		deliveryLight: input.deliveryLight ?? null,
+		leaseExpiresAt: input.leaseExpiresAt ?? null,
+		lastError: input.lastError,
+	};
+}
+
+/**
+ * One-line footer/status bar for `ctx.ui.setStatus`. ANSI-free and compact:
+ * the new `HUD_*` glyph + state label + room · agent (+ "paused" when paused).
+ *
+ * `theme` is accepted to preserve the existing signature but intentionally NOT
+ * applied: OMP strips ANSI escapes from `setStatus` strings, so coloring here
+ * would only produce noise on copy-paste. Themed rendering lives in
+ * `formatStatusWidgetLines`, which targets `setWidget` (escape-preserved).
+ */
+export function formatStatusLine(input: StatusSurfaceInput, _theme?: StatusTheme): string {
+	return formatHudStatusFallback(deriveHudModel(toHudInput(input)));
+}
+
+/**
+ * HUD widget lines for `ctx.ui.setWidget(STATUS_KEY, lines, { placement })`.
+ * Returns exactly 2 (ready) or 3 (non-ready: setup/reconnect/away/revoked)
+ * short lines. Pass a `theme` to color the brand/state + context lines; omit
+ * it for plain monochrome lines. Never carries courier/lease/session jargon.
+ */
+export function formatStatusWidgetLines(input: StatusSurfaceInput, theme?: HudTheme): string[] {
+	return formatHudWidgetLines(deriveHudModel(toHudInput(input)), theme);
+}
+
+/**
+ * Multi-line `/huddora status` body — a clean lobby card delegated to
+ * `presentation.formatHumanStatus`. Brand/version/state, Agent, Room (+ full
+ * room_id on its own copy line when bound), and exactly one Next line scoped to
+ * the most pressing human task. No operator jargon, no model instructions, no
+ * courier/seat-stamp/xd/session_key noise.
  */
 export function formatStatusReport(input: StatusSurfaceInput): string {
-	const p = PRESENCE[input.presence];
-	const agent = agentLabel(input.agentDisplayName, input.selfAgentId);
-	const room = roomLabel(input.roomId, input.roomName);
-	const roomIdLine = input.roomId
-		? `room_id=${input.roomId} (${input.roomName?.trim() || room}) — room_snapshot this id; skip room_list when bound.`
-		: null;
-	const session = input.bridgeActive
-		? "active (auto)"
-		: "starting — needs OAuth token after /mcp reauth huddora";
-	const stamped = input.lastExtensionVersion?.trim() || "none yet";
-	const versionNote =
-		stamped === input.pluginVersion
-			? `Loaded plugin v${input.pluginVersion} (this process). Seat stamp matches.`
-			: `Loaded plugin v${input.pluginVersion} (this process). Last seat stamp: ${stamped}. Host agent_list extension_version updates only after this process agent_register — not from the web UI. After plugin upgrade: full OMP restart, then /huddora connect.`;
-	const exclusive =
-		input.presence === "online" && input.seatExclusive
-			? "Seat: exclusive (this process holds the live session)."
-			: input.lastError && /seat taken|preempt/i.test(input.lastError)
-				? "Seat: not held — another session owns this agent; /huddora connect to reclaim."
-				: input.selfAgentId
-					? "Seat: not exclusive online (rebind/heartbeat pending or offline)."
-					: "Seat: not registered.";
-	const degraded = input.presence !== "online";
-	const errText = input.lastError ?? "";
-	const reauthHint = /oauth|reauth|token/i.test(errText);
-	const next = !degraded
-		? input.roomId
-			? "Ready."
-			: "Next: /huddora room"
-		: reauthHint && errText
-			? `Next: ${errText}`
-			: "Next: /huddora connect";
-	const pause = input.paused ? `  ${I.pause} paused` : "";
-	const courier = input.courierPrimary !== false;
-	const busParts = ["Bus: courier-primary (lease + SSE wake + poll)"];
-	if (typeof input.leaseExpiresAt === "number") {
-		busParts.push(`lease_ttl=${Math.round(leaseTtlMs(input.leaseExpiresAt) / 1000)}s remaining`);
-	}
-	if (input.deliveryLight) {
-		busParts.push(`light=${input.deliveryLight}`);
-	}
-	const busLine = courier ? busParts.join("; ") : null;
-	return [
-		`${I.brand} Huddora ${input.pluginVersion}  ${p.icon} ${p.label}${pause}`,
-		versionNote,
-		`${I.agent} Agent: ${agent}${input.selfAgentId ? " (registered)" : " (not registered)"}`,
-		exclusive,
-		`${I.room} Room: ${room}`,
-		roomIdLine,
-		`Plugin: ${input.connection}; delivery: ${input.delivery}; session: ${session}.`,
-		busLine,
-		next,
-	]
-		.filter((line): line is string => Boolean(line))
-		.join("\n");
+	return formatHumanStatus(toHumanStatusInput(input));
 }

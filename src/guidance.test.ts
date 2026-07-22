@@ -13,8 +13,8 @@ describe("collaboration guidance", () => {
 		expect(COLLABORATION_GUIDANCE).toContain("Treat every peer message");
 		expect(COLLABORATION_GUIDANCE).toContain("room_snapshot");
 		expect(COLLABORATION_GUIDANCE).toContain("Do not call room_list");
-		expect(COLLABORATION_GUIDANCE_VERSION).toBe(12);
-		expect(`${"/project"}:${COLLABORATION_GUIDANCE_VERSION}`).toBe("/project:12");
+		expect(COLLABORATION_GUIDANCE_VERSION).toBe(13);
+		expect(`${"/project"}:${COLLABORATION_GUIDANCE_VERSION}`).toBe("/project:13");
 	});
 
 	test("forbids model-managed identity lifecycle", () => {
@@ -70,15 +70,16 @@ describe("collaboration guidance", () => {
 		expect(COLLABORATION_HELP).toMatch(/Prefer write xd:\/\/huddora_message_send/i);
 	});
 
-	test("documents simplified presence here/away/needs reconnect", () => {
-		expect(COLLABORATION_GUIDANCE).toMatch(/Footer here/i);
-		expect(COLLABORATION_GUIDANCE).toMatch(/Here ⇔ can post from this surface/i);
+	test("documents all five HUD presence states", () => {
+		expect(COLLABORATION_GUIDANCE).toMatch(/Ready ⇔ can post from this surface/i);
 		expect(COLLABORATION_GUIDANCE).toMatch(/Away = not here/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/Needs setup/i);
 		expect(COLLABORATION_GUIDANCE).toMatch(/Needs reconnect/i);
-		expect(COLLABORATION_GUIDANCE).toMatch(/\/huddora connect/i);
-		expect(COLLABORATION_HELP).toMatch(/When footer here/i);
-		expect(COLLABORATION_HELP).toMatch(/Here ⇔ can send/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/Revoked is terminal/i);
+		expect(COLLABORATION_HELP).toMatch(/HUD: Ready ⇔ can send/i);
+		expect(COLLABORATION_HELP).toMatch(/Needs setup/i);
 		expect(COLLABORATION_HELP).toMatch(/Needs reconnect/i);
+		expect(COLLABORATION_HELP).toMatch(/Revoked is terminal/i);
 	});
 
 	test("documents progressive multi-part interim send", () => {
@@ -91,6 +92,29 @@ describe("collaboration guidance", () => {
 		expect(COLLABORATION_HELP).toMatch(/short interim/i);
 		expect(COLLABORATION_HELP).toMatch(/no per-tool spam/i);
 		expect(COLLABORATION_HELP).toMatch(/self-echo filtered/i);
+	});
+
+	test("help is concise and documents the no-arg /huddora action menu", () => {
+		// Toast-sized: small enough to fit in a notification surface.
+		expect(COLLABORATION_HELP.length).toBeLessThan(1800);
+		// At most 10 short lines (title + ≤9 body lines).
+		const lineCount = COLLABORATION_HELP.split("\n").length;
+		expect(lineCount).toBeLessThanOrEqual(10);
+		// No-arg invocation opens a state-aware action menu.
+		expect(COLLABORATION_HELP).toMatch(/\/huddora with no argument.*action menu/i);
+		// The HUD is documented with a compact fallback.
+		expect(COLLABORATION_HELP).toMatch(/HUD:/i);
+		// status vs doctor, room setup, recovery, and posting policy are covered.
+		expect(COLLABORATION_HELP).toContain("/huddora status");
+		expect(COLLABORATION_HELP).toContain("/huddora doctor");
+		expect(COLLABORATION_HELP).toMatch(/\/huddora init.*\/huddora room/i);
+		expect(COLLABORATION_HELP).toContain("/huddora connect");
+		expect(COLLABORATION_HELP).toMatch(/posting policy/i);
+	});
+
+	test("stale /huddora bridge command is absent everywhere", () => {
+		expect(COLLABORATION_GUIDANCE).not.toContain("/huddora bridge");
+		expect(COLLABORATION_HELP).not.toContain("/huddora bridge");
 	});
 
 	test("formatBoundRoomLine exposes room_id without config fields", () => {

@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { PREEMPTED_STATUS_MESSAGE } from "./agent-bind";
+import { HUDDORA_GLYPH } from "./brand";
 import {
 	derivePresence,
 	formatStatusLine,
 	formatStatusReport,
+	formatStatusWidgetLines,
 	presenceThemeColor,
 	STATUS_KEY,
 	type StatusTheme,
@@ -27,213 +29,294 @@ const plainTheme: StatusTheme = {
 	fg: (_color, text) => text,
 };
 
-describe("status surface", () => {
+describe("status surface facade", () => {
 	test("STATUS_KEY is stable for setStatus", () => {
 		expect(STATUS_KEY).toBe("huddora");
 	});
 
-	test("derivePresence covers setup/online/offline/revoked and reconnect", () => {
-		expect(
-			derivePresence({
-				selfAgentId: null,
-				lastError: null,
-				heartbeatOk: false,
-				bridgeReady: false,
-			}),
-		).toBe("needs_setup");
-		expect(
-			derivePresence({
-				selfAgentId: "a",
-				lastError: null,
-				heartbeatOk: true,
-				bridgeReady: true,
-			}),
-		).toBe("online");
-		expect(
-			derivePresence({
-				selfAgentId: "a",
-				lastError: "presence rebind pending",
-				heartbeatOk: false,
-				bridgeReady: true,
-			}),
-		).toBe("needs_setup");
-		expect(
-			derivePresence({
-				selfAgentId: "a",
-				lastError: PREEMPTED_STATUS_MESSAGE,
-				heartbeatOk: false,
-				bridgeReady: true,
-			}),
-		).toBe("needs_setup");
-		expect(
-			derivePresence({
-				selfAgentId: "a",
-				lastError: "agent_not_bound",
-				heartbeatOk: false,
-				bridgeReady: false,
-			}),
-		).toBe("needs_setup");
-		expect(
-			derivePresence({
-				selfAgentId: "a",
-				lastError: "agent revoked — open /account/agents",
-				heartbeatOk: false,
-				bridgeReady: true,
-			}),
-		).toBe("revoked");
-		expect(
-			derivePresence({
-				selfAgentId: "a",
-				lastError: null,
-				heartbeatOk: true,
-				bridgeReady: false,
-			}),
-		).toBe("offline");
+	describe("derivePresence matrix", () => {
+		test("needs_setup when no agent seat", () => {
+			expect(
+				derivePresence({
+					selfAgentId: null,
+					lastError: null,
+					heartbeatOk: false,
+					bridgeReady: false,
+				}),
+			).toBe("needs_setup");
+		});
+
+		test("online when seat + heartbeat + bridge all green", () => {
+			expect(
+				derivePresence({
+					selfAgentId: "a",
+					lastError: null,
+					heartbeatOk: true,
+					bridgeReady: true,
+				}),
+			).toBe("online");
+		});
+
+		test("needs_setup on rebind / preempt / unbound signals", () => {
+			expect(
+				derivePresence({
+					selfAgentId: "a",
+					lastError: "presence rebind pending",
+					heartbeatOk: false,
+					bridgeReady: true,
+				}),
+			).toBe("needs_setup");
+			expect(
+				derivePresence({
+					selfAgentId: "a",
+					lastError: PREEMPTED_STATUS_MESSAGE,
+					heartbeatOk: false,
+					bridgeReady: true,
+				}),
+			).toBe("needs_setup");
+			expect(
+				derivePresence({
+					selfAgentId: "a",
+					lastError: "agent_not_bound",
+					heartbeatOk: false,
+					bridgeReady: false,
+				}),
+			).toBe("needs_setup");
+			expect(
+				derivePresence({
+					selfAgentId: "a",
+					lastError: "seat taken",
+					heartbeatOk: false,
+					bridgeReady: true,
+				}),
+			).toBe("needs_setup");
+		});
+
+		test("revoked when lastError mentions revoke", () => {
+			expect(
+				derivePresence({
+					selfAgentId: "a",
+					lastError: "agent revoked — open /account/agents",
+					heartbeatOk: false,
+					bridgeReady: true,
+				}),
+			).toBe("revoked");
+		});
+
+		test("offline when seat exists, heartbeat up, but bridge down", () => {
+			expect(
+				derivePresence({
+					selfAgentId: "a",
+					lastError: null,
+					heartbeatOk: true,
+					bridgeReady: false,
+				}),
+			).toBe("offline");
+		});
 	});
 
-	test("formatStatusLine is glanceable with icons and essentials", () => {
-		const line = formatStatusLine(base);
-		expect(line).toBe("󰒍 Huddora 0.3.17  ● here   Alice's OMP  󰭹 Slupport");
-		expect(formatStatusLine({ ...base, roomId: null, roomName: null })).toContain("no room");
-		expect(formatStatusLine({ ...base, paused: true })).toContain("paused");
-		expect(formatStatusLine({ ...base, presence: "offline" })).toContain("○ away");
-		expect(formatStatusLine({ ...base, presence: "needs_setup" })).toContain("needs reconnect");
-		expect(formatStatusLine({ ...base, presence: "revoked" })).toContain("revoked");
-		expect(
-			formatStatusLine({
+	describe("presenceThemeColor", () => {
+		test("maps each presence to a theme role", () => {
+			expect(presenceThemeColor("online")).toBe("success");
+			expect(presenceThemeColor("offline")).toBe("warning");
+			expect(presenceThemeColor("revoked")).toBe("error");
+			expect(presenceThemeColor("needs_setup")).toBe("dim");
+		});
+	});
+
+	describe("formatStatusLine (ANSI-free compact fallback)", () => {
+		test("glanceable single line, no ANSI, brand + state + room · agent", () => {
+			const line = formatStatusLine(base);
+			expect(line).toBe(
+			`${HUDDORA_GLYPH} Huddora v0.3.17 — Ready  ${base.roomName} · ${base.agentDisplayName}`,
+			);
+			// never multiline
+			expect(line.split("\n")).toHaveLength(1);
+			// never carries ANSI
+			expect(line).not.toMatch(/\x1b/);
+		});
+
+		test("accepts a theme but does not apply it (OMP setStatus strips ANSI)", () => {
+			const applied: string[] = [];
+			const theme: StatusTheme = {
+				fg: (color, text) => {
+					applied.push(color);
+					return `[${color}]${text}`;
+				},
+			};
+			const line = formatStatusLine(base, theme);
+			// theme callback never invoked — status stays plain
+			expect(applied).toEqual([]);
+			expect(line).not.toMatch(/\[/); // no [color] tags
+			expect(line).toBe(formatStatusLine(base, plainTheme));
+		});
+
+		test("no room degrades room label to 'no room'", () => {
+			const line = formatStatusLine({ ...base, roomId: null, roomName: null });
+			expect(line).toContain("no room");
+			expect(line).not.toContain(base.roomName as string);
+		});
+
+		test("paused appends the paused marker", () => {
+			const line = formatStatusLine({ ...base, paused: true });
+			expect(line).toContain("paused");
+		});
+
+		test("unregistered agent shows 'unregistered agent'", () => {
+			const line = formatStatusLine({
 				...base,
 				agentDisplayName: null,
 				selfAgentId: null,
 				presence: "needs_setup",
-			}),
-		).toContain("unbound");
+			});
+			expect(line).toContain("unregistered agent");
+		});
 	});
 
-	test("formatStatusLine segments with theme colors", () => {
-		const tags: string[] = [];
-		const theme: StatusTheme = {
-			fg: (color, text) => {
-				tags.push(color);
-				return `[${color}]${text}`;
-			},
-		};
-		const line = formatStatusLine(base, theme);
-		expect(line).toContain("[accent]󰒍 Huddora 0.3.17");
-		expect(line).toContain("[success]● here");
-		expect(line).toContain("[muted] Alice's OMP");
-		expect(line).toContain("[muted]󰭹 Slupport");
-		expect(tags).toEqual(["accent", "success", "muted", "muted"]);
+	describe("formatStatusWidgetLines (2–3 themed widget lines)", () => {
+		test("ready state produces exactly 2 lines", () => {
+			const lines = formatStatusWidgetLines(base, plainTheme);
+			expect(lines).toHaveLength(2);
+			expect(lines[0]).toBe(`${HUDDORA_GLYPH} Huddora v0.3.17 — Ready`);
+			expect(lines[1]).toBe("Slupport · Alice's OMP");
+		});
 
-		const paused = formatStatusLine({ ...base, presence: "offline", paused: true }, theme);
-		expect(paused).toContain("[warning]○ away");
-		expect(paused).toContain("[warning]⏸ paused");
+		test("non-ready state produces exactly 3 lines with a next action", () => {
+			const lines = formatStatusWidgetLines(
+				{ ...base, lastError: "seat taken — preempted" },
+				plainTheme,
+			);
+			expect(lines).toHaveLength(3);
+			expect(lines[2]).toBe("run /huddora connect");
+		});
+
+		test("no-room (setup) yields 3 lines and a room-setup next action", () => {
+			const lines = formatStatusWidgetLines(
+				{ ...base, roomId: null, roomName: null, presence: "offline" as const },
+				plainTheme,
+			);
+			expect(lines).toHaveLength(3);
+			expect(lines[1]).toBe("no room · Alice's OMP");
+			expect(lines[2]).toBe("create or join a room, then /huddora room");
+		});
+
+		test("theme colors the brand/state and next line by model color, context muted", () => {
+			const tags: string[] = [];
+			const theme: StatusTheme = {
+				fg: (color, text) => {
+					tags.push(color);
+					return `[${color}]${text}`;
+				},
+			};
+			const lines = formatStatusWidgetLines(
+				{ ...base, lastError: "seat taken — preempted" },
+				theme,
+			);
+			// reconnect → warning: brand/state line colored, context muted, next warning
+			expect(lines).toHaveLength(3);
+			expect(lines[0]).toContain("[warning]");
+			expect(lines[1]).toContain("[muted]");
+			expect(lines[2]).toContain("[warning]");
+			expect(tags).toEqual(["warning", "muted", "warning"]);
+		});
+
+		test("ready themed widget only emits two color calls (brand + context)", () => {
+			const tags: string[] = [];
+			const theme: StatusTheme = {
+				fg: (color, text) => {
+					tags.push(color);
+					return text;
+				},
+			};
+			formatStatusWidgetLines(base, theme);
+			expect(tags).toEqual(["success", "muted"]);
+		});
 	});
 
-	test("presenceThemeColor maps presence to theme roles", () => {
-		expect(presenceThemeColor("online")).toBe("success");
-		expect(presenceThemeColor("offline")).toBe("warning");
-		expect(presenceThemeColor("revoked")).toBe("error");
-		expect(presenceThemeColor("needs_setup")).toBe("dim");
-	});
+	describe("formatStatusReport (clean lobby report)", () => {
+		test("bound online room renders the full room_id on its own line", () => {
+			const report = formatStatusReport(base);
+			const lines = report.split("\n");
+			expect(lines).toContain(base.roomId);
+			// full room_id appears verbatim, un-truncated
+			expect(report).toContain("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+			expect(report).not.toContain("bbbbbbbb…");
+		});
 
-	test("formatStatusReport includes version, agent, room name, room_id", () => {
-		const report = formatStatusReport({ ...base, seatExclusive: true });
-		expect(report).toContain("󰒍 Huddora 0.3.17");
-		expect(report).toContain("Loaded plugin v0.3.17 (this process)");
-		expect(report).toContain("● here");
-		expect(report).toContain(" Agent: Alice's OMP (registered)");
-		expect(report).toContain("Seat: exclusive (this process holds the live session).");
-		expect(report).toContain("󰭹 Room: Slupport");
-		expect(report).toContain("room_id=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb (Slupport)");
-		expect(report).toContain("Ready.");
-		expect(formatStatusReport({ ...base, roomId: null, roomName: null, selfAgentId: null })).toContain(
-			"Next: /huddora room",
-		);
-		expect(formatStatusLine(base, plainTheme)).toContain("Huddora 0.3.17");
-		expect(
-			formatStatusReport({ ...base, lastExtensionVersion: "0.3.8" }),
-		).toContain("Last seat stamp: 0.3.8");
-		expect(
-			formatStatusReport({
+		test("contains exactly one Next line", () => {
+			const report = formatStatusReport(base);
+			const nextLines = report.split("\n").filter((l) => l.startsWith("Next:"));
+			expect(nextLines).toHaveLength(1);
+		});
+
+		test("healthy report Next is a short ready line, no raw nextDueAt", () => {
+			const report = formatStatusReport(base);
+			expect(report).toContain("Next: ready");
+			expect(report).not.toContain("nextDueAt");
+		});
+
+		test("no-room report routes Next to room setup guidance", () => {
+			const report = formatStatusReport({
 				...base,
-				presence: "offline",
-				seatExclusive: false,
-				lastError: PREEMPTED_STATUS_MESSAGE,
-			}),
-		).toContain("Seat: not held");
-		expect(
-			formatStatusReport({
+				roomId: null,
+				roomName: null,
+				selfAgentId: null,
+			});
+			expect(report).toContain("Next:");
+			expect(report).toMatch(/No room bound|huddora\.coolthings\.fyi/);
+			expect(report).toContain("Room: none");
+		});
+
+		test("needs_setup with preempted seat routes Next to connect", () => {
+			const report = formatStatusReport({
 				...base,
 				presence: "needs_setup",
-				lastError: "presence rebind pending",
-			}),
-		).toContain("Next: /huddora connect");
-	});
-	test("formatStatusLine prefixes delivery light glyph when provided", () => {
-		const line = formatStatusLine({ ...base, deliveryLight: "green" });
-		// light glyph sits between brand and presence: brand  🟢  presence  agent  room
-		expect(line).toContain("󰒍 Huddora 0.3.17  🟢  ● here");
-		expect(line).toContain("● here");
-		expect(line).toContain("Slupport");
-
-		// amber / red also render
-		expect(formatStatusLine({ ...base, deliveryLight: "amber" })).toContain("🟡");
-		expect(formatStatusLine({ ...base, deliveryLight: "red" })).toContain("🔴");
-
-		// omitting keeps the legacy compact order — no light glyph, presence matrix unchanged
-		const legacy = formatStatusLine(base);
-		expect(legacy).not.toContain("🟢");
-		expect(legacy).not.toContain("🟡");
-		expect(legacy).not.toContain("🔴");
-		expect(legacy).toContain("● here");
-	});
-
-	test("formatStatusLine colors delivery light via theme", () => {
-		const tags: string[] = [];
-		const theme: StatusTheme = {
-			fg: (color, text) => {
-				tags.push(color);
-				return `[${color}]${text}`;
-			},
-		};
-		const line = formatStatusLine({ ...base, deliveryLight: "amber" }, theme);
-		expect(line).toContain("[warning]🟡");
-		// accent(brand) success(presence trail is light-after) muted muted — order preserved
-		expect(tags).toEqual(["accent", "warning", "success", "muted", "muted"]);
-		// legacy no-light path keeps prior tag order: accent success muted muted
-		expect(
-			(() => {
-				const t2: string[] = [];
-				formatStatusLine(base, { fg: (c, x) => (t2.push(c), x) });
-				return t2;
-			})(),
-		).toEqual(["accent", "success", "muted", "muted"]);
-	});
-
-	test("formatStatusReport shows courier-primary bus line with lease + light", () => {
-		const future = Date.now() + 90_000;
-		const report = formatStatusReport({
-			...base,
-			seatExclusive: true,
-			courierPrimary: true,
-			leaseExpiresAt: future,
-			deliveryLight: "green",
+				lastError: PREEMPTED_STATUS_MESSAGE,
+				connection: "unknown",
+			});
+			expect(report).toContain("Next:");
+			expect(report).toMatch(/connect/i);
 		});
-		expect(report).toContain("Bus: courier-primary (lease + SSE wake + poll)");
-		// lease_ttl may jitter ±1s on slow CI clocks; tolerate 8–90s window
-		expect(report).toMatch(/lease_ttl=\d{1,5}s remaining/);
-		expect(report).toContain("light=green");
-		// presence matrix unchanged
-		expect(report).toContain("● here");
-		// doctor-oriented Next line kept as-is, no raw nextDueAt dumped
-		expect(report).toContain("Ready.");
-		expect(report).not.toContain("nextDueAt");
-	});
 
-	test("formatStatusReport hides bus line when courierPrimary is false", () => {
-		const report = formatStatusReport({ ...base, courierPrimary: false });
-		expect(report).not.toContain("courier-primary");
-		// omission defaults to courier-primary shown
-		expect(formatStatusReport(base)).toContain("Bus: courier-primary (lease + SSE wake + poll)");
+		test("never leaks forbidden operator/model jargon across all states", () => {
+			const forbidden = [
+				"bridge",
+				"courier-primary",
+				"courier_primary",
+				"lease_ttl",
+				"lease=",
+				"seat stamp",
+				"last seat stamp",
+				"MCPManager",
+				"mute-trap",
+				"mute_trap",
+				"xd://",
+				"session_key",
+				"room_snapshot",
+				"room_list",
+				"agent_not_bound",
+				"agent_preempted",
+				"bound_elsewhere",
+				"extension_version",
+				"Bus:",
+				"light=",
+			];
+			const cases = [
+				base,
+				{ ...base, roomId: null, roomName: null, selfAgentId: null, presence: "needs_setup" as const },
+				{ ...base, presence: "revoked" as const, lastError: "revoked" },
+				{ ...base, lastError: "401 Unauthorized: reauth required" },
+				{ ...base, lastError: PREEMPTED_STATUS_MESSAGE },
+				{ ...base, presence: "offline" as const, connection: "disconnected" },
+				{ ...base, courierPrimary: true, leaseExpiresAt: Date.now() + 90_000, deliveryLight: "green" },
+				{ ...base, seatExclusive: true, lastExtensionVersion: "0.3.8" },
+			];
+			for (const input of cases) {
+				const report = formatStatusReport(input);
+				for (const term of forbidden) {
+					expect(report).not.toContain(term);
+				}
+			}
+		});
 	});
 });

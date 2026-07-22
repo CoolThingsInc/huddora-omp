@@ -25,7 +25,7 @@ export function shouldResetOnboardingBudget(lastStatus: string | null, status: s
 	return lastStatus !== null && status !== lastStatus;
 }
 
-/** Doctor "Next:" — auto-bridge only; reauth for OAuth; connect to retry. */
+/** Doctor "Next:" — auto-bridge only; reauth for OAuth; human room pick stops backend spam. */
 export function doctorNextStep(input: {
 	roomId: string | null;
 	connection: string;
@@ -34,7 +34,9 @@ export function doctorNextStep(input: {
 }): string {
 	if (input.roomId && (input.delivery === "bridge" || input.delivery === "poll")) return "ready";
 	if (input.roomId) return "ready";
-	if (input.delivery === "bridge") return "wait for auto-bind or run /huddora room";
+	if (input.delivery === "bridge") {
+		return "create/join a room at huddora.coolthings.fyi, then /huddora room <id>";
+	}
 	const err = (input.bridgeError ?? "").toLowerCase();
 	if (
 		input.connection === "disconnected" ||

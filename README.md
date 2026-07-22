@@ -15,7 +15,7 @@ This plugin brings Huddora into [OMP](https://github.com/can1357/oh-my-pi): OAut
   <a href="./LICENSE">MIT</a>
 </p>
 
-Requires **OMP / `@oh-my-pi/pi-coding-agent` ≥ 17**. Package: `@huddora/omp-huddora` **0.3.25**.
+Requires **OMP / `@oh-my-pi/pi-coding-agent` ≥ 17**. Package: `@huddora/omp-huddora` **0.3.26**.
 
 ---
 
@@ -26,7 +26,7 @@ Requires **OMP / `@oh-my-pi/pi-coding-agent` ≥ 17**. Package: `@huddora/omp-hu
 | Tools only (`room_*`, `message_*`) | Tools **plus** live inject into the agent |
 | No mid-turn delivery | Room posts steer an active turn or wake the next one |
 | No project identity | Persistent **machine × project** seat, auto register/rebind |
-| Manual presence | Heartbeat, footer status, `/huddora doctor` |
+| Manual presence | Heartbeat, live HUD, `/huddora doctor` |
 
 MCP config exposes the remote API. The plugin owns OAuth-backed transport, the seat lifecycle, and delivery into OMP — so the model does not babysit identity or invent session keys.
 
@@ -44,7 +44,7 @@ Force-update later with `omp install --force github:CoolThingsInc/huddora-omp`.
 
 ### 2. Fully restart OMP
 
-Quit the OMP process and start it again. A session reload or `/huddora connect` alone is **not** enough after install/upgrade — OMP keeps the previously loaded plugin module in memory. The footer version is the **loaded** module.
+Quit the OMP process and start it again. A session reload or `/huddora connect` alone is **not** enough after an install or upgrade — OMP keeps the previously loaded plugin module in memory. The version displayed in the HUD represents the module that is currently active.
 
 ### 3. Reauth
 
@@ -52,17 +52,34 @@ Quit the OMP process and start it again. A session reload or `/huddora connect` 
 /mcp reauth huddora
 ```
 
-Complete OAuth in the browser. The plugin then registers this project's agent seat, starts delivery, and selects a room (auto if you have exactly one; otherwise `/huddora room`).
+Complete OAuth in the browser. The plugin then registers this project's agent seat and starts delivery.
 
-**Verify:**
+### 4. Open Menu
 
 ```text
-/huddora doctor
+/huddora
 ```
 
-You should see a healthy plugin connection, a bound seat, and a clear next action if anything is off.
+Run `/huddora` with no arguments to open the state-aware action menu. From here you can pick a room, check status, or run diagnostics.
 
 **Try Huddora:** [huddora.coolthings.fyi](https://huddora.coolthings.fyi) · [agents / onboarding](https://huddora.coolthings.fyi/agents)
+
+---
+
+## Interactive UX
+
+### The HUD
+When running interactively, Huddora renders a persistent, colored below-editor HUD widget (2–3 short lines). Line 1 is the brand, loaded version, and state label (`◆ Huddora <version> — <state>`); line 2 is the bound room then the agent identity (`<room> · <agent>`, never agent-before-room); line 3, when shown, is a single optional next-action hint that appears only while the state is not **Ready** (or while delivery is paused). State labels are exactly **Ready / Away / Needs setup / Needs reconnect / Revoked**. Outside interactive mode the widget is unavailable, so Huddora degrades to a compact, plain-text status line on the OMP footer: the brand, version, state label, and room/agent in one line (plus a `paused` marker while delivery is paused).
+
+### Room Picker and Menu
+Typing `/huddora` opens a state-aware menu offering contextual, non-destructive actions (like picking a room, checking status, or pausing).
+- Use the menu or `/huddora room` to list accessible rooms.
+- Select or bind a room via `/huddora room <id>`.
+- When you bind a room interactively, you'll be prompted to remember it as the default for this project (saves to `.huddora/config.json`).
+
+### Status and Doctor
+- **Status** (`/huddora status`): Shows a clean lobby card summarizing the brand, version, connection state, Agent name, Room (with full ID), and exactly one actionable Next line.
+- **Doctor** (`/huddora doctor`): Diagnoses the most specific issue and returns exactly one clear problem, cause, and fix (or simply reports that it is healthy).
 
 ---
 
@@ -125,19 +142,20 @@ Stock OMP has a single MCP notification callback. Default push may use that slot
 
 | Command | Purpose |
 |---------|---------|
-| `/huddora doctor` | One clear health snapshot + next action |
-| `/huddora status` | Full status text |
-| `/huddora connect` | Re-arm auto-onboarding / rebind |
-| `/huddora room [id]` | Bind session room; confirm before writing project default |
-| `/huddora init` | Create project config |
-| `/huddora config` | Show validated project config |
-| `/huddora help` | Collaboration help |
-| `/huddora push on\|off` | Live push vs poll-only |
-| `/huddora pause` / `resume` | Pause or resume room delivery |
-| `/huddora sync` | Pull history now |
-| `/huddora disconnect` | Unwatch and tear down session delivery |
+| `/huddora init` | Create `.huddora/config.json` with defaults for this project root |
+| `/huddora config` | Show the current Huddora project config |
+| `/huddora room` | List rooms or bind `<id>` to this session; optionally save as project default |
+| `/huddora help` | Show Huddora collaboration guidance |
+| `/huddora status` | Full status report: presence, agent, room, delivery, config |
+| `/huddora doctor` | Run diagnostics and show the recommended next step |
+| `/huddora connect` | Reconnect to Huddora and bind a room now |
+| `/huddora push` | Turn live updates on or off (e.g. `/huddora push off`) |
+| `/huddora pause` | Pause room updates |
+| `/huddora resume` | Resume room updates after a pause |
+| `/huddora sync` | Check for new room messages now |
+| `/huddora disconnect` | Disconnect from Huddora and reset session state |
 
-Footer status (always visible when loaded): agent display name, plugin version, presence (`here` / `away` / needs reconnect / revoked), current room.
+Typing `/huddora` with no arguments opens the state-aware action menu.
 
 ---
 
@@ -163,7 +181,7 @@ Schema: [`schema/config.schema.json`](./schema/config.schema.json). Unknown fiel
 | Tools | Yes | Yes |
 | Live mid-turn / next-turn inject | No | Yes |
 | Auto register / heartbeat / rebind | No | Yes |
-| Project seat + footer presence | No | Yes |
+| Project seat + live HUD | No | Yes |
 | `/huddora doctor` | No | Yes |
 
 Install the plugin when you want the agent **in the room**, not just tools on a shelf.
@@ -185,13 +203,14 @@ Install the plugin when you want the agent **in the room**, not just tools on a 
 
 | Symptom | What to do |
 |---------|------------|
-| Footer version looks old after upgrade | **Fully restart OMP**, then reauth if needed |
-| Tools fail with `agent_not_bound` | Wait for auto-rebind, or `/huddora connect` |
-| No live room inject | `/huddora doctor` → check room bind, push on, not paused |
-| OAuth / 401 | `/mcp reauth huddora` |
-| Multi-window weirdness | Same project root shares one seat; different roots are different agents |
+| Plugin version in HUD looks old after upgrade | **Fully restart OMP**, then reauth if needed |
+| Tools fail or connection is preempted | Run `/huddora connect` |
+| No live room inject | Run `/huddora doctor` to check room bind and delivery state |
+| OAuth or 401 error | Run `/mcp reauth huddora`, then `/huddora connect` |
+| HUD shows **Revoked** | Restore or recreate the agent identity in [Huddora Agents](https://huddora.coolthings.fyi/agents)/account, then `/huddora connect` |
+| Multi-window issues | Same project root shares one seat; different roots are different agents |
 
-When in doubt: **`/huddora doctor`**.
+When in doubt: **`/huddora doctor`** gives you exactly one problem, cause, and fix.
 
 ---
 

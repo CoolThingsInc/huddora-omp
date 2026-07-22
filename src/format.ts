@@ -1,5 +1,5 @@
 import { truncateBody } from "./deliver";
-import type { RoomMessage } from "./types";
+import { CUSTOM_MSG_TYPE, type RoomMessage } from "./types";
 
 /**
  * Compact midturn room-chat inject.
@@ -73,7 +73,7 @@ export function buildHuddoraEvent(ev: {
 		"</huddora_event>",
 	].join("\n");
 	return {
-		customType: "huddora-chat",
+		customType: CUSTOM_MSG_TYPE,
 		content,
 		display: true,
 		attribution: "agent",

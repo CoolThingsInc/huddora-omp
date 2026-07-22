@@ -1,6 +1,6 @@
 {
 	"name": "@huddora/omp-huddora",
-	"version": "0.3.25",
+	"version": "0.3.26",
 	"type": "module",
 	"description": "OMP plugin for Huddora: room chat via MCP (definition-only) + live inject (/huddora)",
 	"exports": {
@@ -36,13 +36,20 @@
 			"/huddora room",
 			"/huddora help",
 			"/huddora status",
-			"/huddora doctor"
+			"/huddora doctor",
+			"/huddora connect",
+			"/huddora push",
+			"/huddora pause",
+			"/huddora resume",
+			"/huddora sync",
+			"/huddora disconnect"
 		]
 	},
 	"scripts": {
+		"sync:commands": "bun run scripts/sync-command-manifest.ts",
 		"typecheck": "tsc -p tsconfig.json --noEmit",
 		"test": "bun test src",
-		"build": "tsc -p tsconfig.json"
+		"build": "bun run sync:commands && tsc -p tsconfig.json"
 	},
 	"peerDependencies": {
 		"@oh-my-pi/pi-coding-agent": ">=17.0.0"

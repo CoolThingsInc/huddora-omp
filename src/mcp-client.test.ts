@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import {
 	__setHostMcpForTests,
 	callHuddoraTool,
+	formatHybridPullHint,
 	getHuddoraConnectionStatus,
 	getHostMcpManager,
 	resolveHostMcp,
@@ -57,5 +58,44 @@ describe("bridge tool path + optional host manager", () => {
 		setPluginBridge(null);
 		expect(await getHuddoraConnectionStatus()).toBe("bridge_missing");
 		expect((await callHuddoraTool("agent_register")).ok).toBe(false);
+	});
+});
+
+describe("formatHybridPullHint", () => {
+	test("no dead /huddora bridge command and stays actionable", () => {
+		const hint = formatHybridPullHint({
+			roomId: "r1",
+			roomName: "Ops",
+			cursor: 42,
+			limit: 10,
+		});
+
+		// Dead command reference must not appear anywhere in the hint.
+		expect(hint).not.toContain("/huddora bridge");
+
+		// Plugin connection is unavailable; recovery is reauth then connect.
+		expect(hint).toContain("plugin connection is unavailable");
+		expect(hint).toContain("/mcp reauth huddora");
+		expect(hint).toContain("/huddora connect");
+
+		// Fallback stays actionable with the technical fields the model needs.
+		expect(hint).toContain("message_history");
+		expect(hint).toContain("room_id=r1");
+		expect(hint).toContain("room_name=Ops");
+		expect(hint).toContain("after_cursor=42");
+		expect(hint).toContain("limit=10");
+	});
+
+	test("falls back to room id when name is missing", () => {
+		const hint = formatHybridPullHint({
+			roomId: "r1",
+			roomName: null,
+			cursor: 0,
+			limit: 1,
+		});
+		expect(hint).toContain("room_name=r1");
+		expect(hint).toContain("after_cursor=0");
+		expect(hint).toContain("limit=1");
+		expect(hint).not.toContain("/huddora bridge");
 	});
 });

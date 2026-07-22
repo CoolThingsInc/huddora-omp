@@ -6,6 +6,8 @@
  * New bind preempts the previous live session.
  */
 
+import { preempted } from "./human-messages";
+
 /** Server / tool text that means this MCP session has no agent bound. */
 export function isAgentUnboundError(message: string): boolean {
 	if (isAgentPreemptedError(message)) return false;
@@ -133,8 +135,7 @@ export function buildAgentRegisterArgs(input: {
 }
 
 /** User-facing copy when this process lost the exclusive seat. */
-export const PREEMPTED_STATUS_MESSAGE =
-	"seat taken by another session — this process is away. Run /huddora connect to reclaim.";
+export const PREEMPTED_STATUS_MESSAGE = preempted();
 
 /**
  * Pure transition when server notifies agent_preempted or a tool says seat is elsewhere.

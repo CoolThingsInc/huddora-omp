@@ -40,10 +40,10 @@ describe("doctorNextStep auto-bridge", () => {
 		).toBe("wait for auto-connect or run /huddora connect");
 	});
 
-	test("bridge active points at room bind", () => {
+	test("bridge active points at human room create/pick", () => {
 		expect(
 			doctorNextStep({ roomId: null, connection: "bridge", delivery: "bridge" }),
-		).toBe("wait for auto-bind or run /huddora room");
+		).toBe("create/join a room at huddora.coolthings.fyi, then /huddora room <id>");
 	});
 
 	test("oauth errors may reauth", () => {

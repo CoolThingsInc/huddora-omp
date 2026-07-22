@@ -12,6 +12,7 @@ import {
 	PREEMPTED_STATUS_MESSAGE,
 	type RebindGate,
 } from "./agent-bind";
+import { preempted } from "./human-messages";
 
 describe("isAgentUnboundError", () => {
 	test("matches server agent_not_bound phrasing", () => {
@@ -135,6 +136,17 @@ describe("seat exclusivity helpers", () => {
 		expect(
 			applySeatPreempted({ selfAgentId: "a1", lastError: null }, "other").lastError,
 		).toBeNull();
+	});
+
+	test("PREEMPTED_STATUS_MESSAGE is jargon-free and matches human-messages.preempted()", () => {
+		expect(PREEMPTED_STATUS_MESSAGE).toBe(preempted());
+		expect(PREEMPTED_STATUS_MESSAGE).toMatch(/^Huddora:/i);
+		expect(PREEMPTED_STATUS_MESSAGE).toMatch(/another window is connected/i);
+		expect(PREEMPTED_STATUS_MESSAGE).toMatch(/\/huddora connect/i);
+		// Forbidden jargon in user-facing copy
+		expect(PREEMPTED_STATUS_MESSAGE).not.toMatch(/session_key/i);
+		expect(PREEMPTED_STATUS_MESSAGE).not.toMatch(/MCPManager/i);
+		expect(PREEMPTED_STATUS_MESSAGE).not.toMatch(/seat taken/i);
 	});
 });
 

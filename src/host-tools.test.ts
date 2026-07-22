@@ -68,21 +68,37 @@ describe("mergeHostToolsWhenBound", () => {
 });
 
 describe("formatHostSeatDoctorLine", () => {
-	test("bound vs unbound", () => {
-		expect(formatHostSeatDoctorLine({ hostSeatBound: true, lastBindDetail: null })).toMatch(
-			/Host seat: bound/,
-		);
-		expect(
-			formatHostSeatDoctorLine({
-				hostSeatBound: false,
-				lastBindDetail: "MCPManager.instance() null (dual-package)",
-			}),
-		).toMatch(/unbound/);
-		expect(
-			formatHostSeatDoctorLine({
-				hostSeatBound: false,
-				lastBindDetail: "MCPManager.instance() null (dual-package)",
-			}),
-		).toMatch(/xd:\/\/huddora_message_send only/);
+	// Forbidden jargon: session_key, MCPManager, mute-trap, xd://, tool names.
+	const FORBIDDEN = [
+		/session_key/i,
+		/MCPManager/i,
+		/mute[-_ ]?trap/i,
+		"xd://",
+		/huddora_message_send/i,
+		/agent_register/i,
+		/agent_heartbeat/i,
+	];
+
+	test("bound says can post, no jargon, no raw detail", () => {
+		const line = formatHostSeatDoctorLine({
+			hostSeatBound: true,
+			lastBindDetail: "MCPManager.instance() null (dual-package)",
+		});
+		expect(line).toMatch(/Host seat: bound/i);
+		expect(line).toMatch(/can post/i);
+		for (const re of FORBIDDEN) expect(line).not.toMatch(re);
+	});
+
+	test("unbound says posting uses plugin connection, no jargon or raw detail", () => {
+		const line = formatHostSeatDoctorLine({
+			hostSeatBound: false,
+			lastBindDetail: "MCPManager.instance() null (dual-package)",
+		});
+		expect(line).toMatch(/Host seat: away/i);
+		expect(line).toMatch(/plugin connection/i);
+		expect(line).toMatch(/\/huddora connect/i);
+		// lastBindDetail must not leak
+		expect(line).not.toContain("dual-package");
+		for (const re of FORBIDDEN) expect(line).not.toMatch(re);
 	});
 });

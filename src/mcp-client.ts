@@ -145,7 +145,7 @@ export async function mcpMessageHistory(
 	};
 }
 
-/** Hint when bridge cannot start — model may still use host mcp__huddora_* tools. */
+/** Hint when the plugin connection is unavailable — model may still use host mcp__huddora_* tools. */
 export function formatHybridPullHint(input: {
 	roomId: string;
 	roomName: string | null;
@@ -155,8 +155,9 @@ export function formatHybridPullHint(input: {
 	const title = input.roomName?.trim() || input.roomId;
 	return [
 		"<huddora-hybrid-pull>",
-		"Huddora plugin bridge is not active. Prefer /huddora bridge on after /mcp reauth huddora.",
-		"If you need room chat via host tools, call message_history once:",
+		"Huddora plugin connection is unavailable.",
+		"If your credentials expired, run /mcp reauth huddora, then /huddora connect to restore it.",
+		"Until the plugin reconnects, fetch room chat once via message_history:",
 		`  room_id=${input.roomId}`,
 		`  room_name=${title}`,
 		`  after_cursor=${input.cursor}`,

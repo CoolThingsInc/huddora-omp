@@ -42,14 +42,18 @@ export function mergeHostToolsWhenBound(input: {
 	return [...new Set([...input.active, ...host])];
 }
 
-/** Human-readable doctor line for host bind state. */
+/**
+ * Human-readable doctor line for host bind state.
+ * Returned copy is jargon-free and actionable; internal detail
+ * (session_key, MCPManager, xd://, tool names) is never leaked.
+ * The helper remains exported for compatibility even if doctor stops calling it.
+ */
 export function formatHostSeatDoctorLine(input: {
 	hostSeatBound: boolean;
 	lastBindDetail: string | null;
 }): string {
 	if (input.hostSeatBound) {
-		return "Host seat: bound (mcp__huddora_message_send shares session_key)";
+		return "Host seat: bound — can post from this OMP window.";
 	}
-	const detail = input.lastBindDetail?.trim() || "MCPManager unavailable or host register failed";
-	return `Host seat: unbound (${detail}) — model send path is write xd://huddora_message_send only; host mute-trap tools hidden`;
+	return "Host seat: away — posting uses the plugin connection. Run /huddora connect to bind here.";
 }
