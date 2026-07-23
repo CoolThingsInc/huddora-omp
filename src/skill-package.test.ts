@@ -30,4 +30,30 @@ describe("bundled collaboration skill", () => {
 		expect(text).toMatch(/mute-online trap|unsupported\/hidden|Host seat: bound/i);
 		expect(text).not.toMatch(/both.*OK when footer online/i);
 	});
+
+	test("frontmatter meets the Agent Skills metadata contract", async () => {
+		const path = join(import.meta.dir, "..", "skills", "huddora-collaboration", "SKILL.md");
+		const text = await Bun.file(path).text();
+		const fm = text.split("\n");
+		expect(fm[0]).toBe("---");
+		let body = -1;
+		for (let i = 1; i < fm.length; i++) {
+			if (fm[i] === "---") {
+				body = i;
+				break;
+			}
+		}
+		expect(body).toBeGreaterThan(0);
+		const front = fm.slice(1, body).join("\n");
+		// metadata.version set to "1", no top-level version.
+		expect(front).toMatch(/^metadata:$/m);
+		expect(front).toMatch(/^  version: "1"$/m);
+		expect(front).not.toMatch(/^version:/m);
+		// name equals the directory name and stays kebab-case.
+		expect(front).toMatch(/name: huddora-collaboration\b/);
+		// description present and within budget.
+		const desc = /description:\s*(.*)/.exec(front)?.[1] ?? "";
+		expect(desc.length).toBeGreaterThan(0);
+		expect(desc.length).toBeLessThanOrEqual(1024);
+	});
 });

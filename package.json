@@ -49,6 +49,7 @@
 		"sync:commands": "bun run scripts/sync-command-manifest.ts",
 		"typecheck": "tsc -p tsconfig.json --noEmit",
 		"test": "bun test src",
+		"check:skills": "bun run scripts/check-agent-skills.ts",
 		"build": "bun run sync:commands && tsc -p tsconfig.json"
 	},
 	"peerDependencies": {

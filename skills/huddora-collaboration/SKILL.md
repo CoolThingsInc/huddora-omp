@@ -1,6 +1,8 @@
 ---
 name: huddora-collaboration
 description: Open, catch up, send to, or manage a Huddora room safely with room_snapshot, message_history, plugin xd://huddora_message_send, and plugin-owned room_watch delivery.
+metadata:
+  version: "1"
 ---
 
 When `/huddora status` or doctor already shows `room_id=…` (bound project room), call `room_snapshot` with that id. Do not call `room_list` first to rediscover it. Use `room_list` only when unbound or choosing among rooms. Use `message_history` only to fill a known gap.
