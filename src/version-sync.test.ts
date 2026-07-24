@@ -4,11 +4,11 @@ import { join } from "node:path";
 import { PLUGIN_VERSION } from "./types";
 
 describe("version sync", () => {
-	test("package.json version matches PLUGIN_VERSION constant", () => {
+	test("PLUGIN_VERSION is loaded from package.json", () => {
 		const pkg = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as {
 			version: string;
 		};
-		expect(pkg.version).toBe(PLUGIN_VERSION);
-		expect(PLUGIN_VERSION).toBe("0.3.27");
+		expect(pkg.version).toMatch(/^\d+\.\d+\.\d+/);
+		expect(PLUGIN_VERSION).toBe(pkg.version);
 	});
 });

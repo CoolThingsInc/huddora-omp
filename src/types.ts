@@ -1,3 +1,7 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 /** Durable session state (appendEntry customType: huddora-state). */
 export type HuddoraPluginState = {
 	/** Single active room for this OMP session (v1 simplification). */
@@ -93,7 +97,16 @@ export type RoomListItem = {
 export const CUSTOM_STATE_TYPE = "huddora-state";
 export const CUSTOM_MSG_TYPE = "huddora-event";
 export const MCP_SERVER = "huddora";
-export const PLUGIN_VERSION = "0.3.27";
+function packageVersion(): string {
+	const pkgPath = join(dirname(fileURLToPath(import.meta.url)), "..", "package.json");
+	const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: unknown };
+	if (typeof pkg.version !== "string" || !pkg.version.trim()) {
+		throw new Error("package.json missing version");
+	}
+	return pkg.version.trim();
+}
+
+export const PLUGIN_VERSION = packageVersion();
 
 /** Max messages injected per poll/sync (bounded context). */
 export const INJECT_LIMIT = 40;
