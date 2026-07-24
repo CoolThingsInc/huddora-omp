@@ -9,6 +9,13 @@ const HOST_MUTE_TRAP_TOOLS = new Set([
 	"mcp__huddora_message_send",
 	"mcp__huddora_agent_register",
 	"mcp__huddora_agent_heartbeat",
+	// Task mutations require the bound agent seat; host can't co-bind it, so these
+	// return agent_not_bound from the host Streamable session. Excluded: task_list
+	// is read-only and the plugin surface pins mine=true, so it stays available.
+	"mcp__huddora_task_accept",
+	"mcp__huddora_task_handoff",
+	"mcp__huddora_task_complete",
+	"mcp__huddora_task_fail",
 ]);
 
 /** Host tool names that fail with agent_not_bound while only the bridge is seated. */

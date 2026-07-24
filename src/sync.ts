@@ -1,6 +1,7 @@
 import { boundMessages, filterOwnMessages, formatRoomChatInjection, maxCursor } from "./format";
 import { mcpMessageHistory, mcpRoomSnapshot } from "./mcp-client";
 import { advanceCursor, markEmpty, markError, toDurable } from "./state";
+import { isDirectBatch } from "./deliver";
 import type { HuddoraPluginState, RoomMessage } from "./types";
 import { INJECT_LIMIT, LONG_POLL_MS } from "./types";
 
@@ -10,6 +11,8 @@ export type SyncOutcome =
 			state: HuddoraPluginState;
 			content: string;
 			messageCount: number;
+			/** Batch classified as directly addressing this seat (mentions/reply-to-self). */
+			triggerEligible: boolean;
 			/** Cursor after successful handling. */
 			cursorAfter: number;
 	  }
@@ -76,6 +79,8 @@ export async function pullAndFormat(
 	const cursorAfter =
 		res.data.next_cursor ?? maxCursor(messages) ?? maxCursor(res.data.messages) ?? state.cursor;
 
+	const triggerEligible = isDirectBatch(messages, state.selfAgentId);
+
 	const content = formatRoomChatInjection({
 		roomId: state.roomId,
 		roomName: state.roomName,
@@ -93,6 +98,7 @@ export async function pullAndFormat(
 		state: advanced,
 		content,
 		messageCount: messages.length,
+		triggerEligible,
 		cursorAfter: advanced.cursor,
 	};
 }

@@ -75,6 +75,14 @@ import {
 } from "./project-config";
 import { bootstrapRoom, durablePayload, longPollWaitMs, pullAndFormat } from "./sync";
 import { buildMessageSendArgs, formatMessageSendToolResult } from "./send-tool";
+import {
+	buildTaskAcceptArgs,
+	buildTaskCompleteArgs,
+	buildTaskFailArgs,
+	buildTaskHandoffArgs,
+	buildTaskListArgs,
+	formatTaskToolResult,
+} from "./task-tool";
 import { bindHostAgentSeat } from "./host-seat";
 import {
 	deliveryLight as deriveDeliveryLight,
@@ -456,13 +464,25 @@ function refreshStatusSurface(ctx?: ExtensionContext | null) {
 	}
 
 	/**
-	 * Mid-turn policy (midturn report):
-	 * active → steer; idle → nextTurn + triggerTurn.
+	 * Mid-turn delivery policy — direct-address gating.
+	 * active → steer (context can steer an ongoing turn); idle → nextTurn,
+	 *   triggering only when the batch directly addresses this seat (mention/reply-to-self).
+	 * Ambient idle batches inject as context without waking.
 	 * Rate/dedupe via gateInject. Never sendUserMessage for peers.
 	 */
-	function queueInject(content: string, cursorAfter: number, messageCount: number) {
+	function queueInject(
+		content: string,
+		cursorAfter: number,
+		messageCount: number,
+		triggerEligible: boolean,
+	) {
 		const isIdle = liveCtx ? liveCtx.isIdle() : true;
-		const gated = gateInject(rateGuard, { isIdle, content, noise: messageCount === 0 });
+		const gated = gateInject(rateGuard, {
+			isIdle,
+			content,
+			noise: messageCount === 0,
+			triggerEligible,
+		});
 		if (!gated) return false;
 		rateGuard = gated.guard;
 		pi.sendMessage(
@@ -477,6 +497,7 @@ function refreshStatusSurface(ctx?: ExtensionContext | null) {
 					messageCount,
 					pluginVersion: PLUGIN_VERSION,
 					agentId: state.selfAgentId,
+					triggerEligible,
 				},
 			},
 			gated.options,
@@ -846,14 +867,25 @@ function refreshStatusSurface(ctx?: ExtensionContext | null) {
 		try {
 			const outcome = await pullAndFormat(state, { waitMs: 0 });
 			if (outcome.kind === "injected") {
-				if (!injectedCursors.has(outcome.cursorAfter)) {
-					const queued = queueInject(outcome.content, outcome.cursorAfter, outcome.messageCount);
+				if (injectedCursors.has(outcome.cursorAfter)) {
+					// Already delivered at this cursor (e.g. wake pull raced with poll).
+					persist(outcome.state);
+				} else {
+					const queued = queueInject(
+						outcome.content,
+						outcome.cursorAfter,
+						outcome.messageCount,
+						outcome.triggerEligible,
+					);
 					if (queued) {
 						injectedCursors.add(outcome.cursorAfter);
 						if (ctx.hasUI) ctx.ui.notify(`Huddora: +${outcome.messageCount} msg`, "info");
+						persist(outcome.state);
 					}
+					// queueInject returned false (rate/dedupe drop): retain the prior
+					// cursor so durable history retries after the rate window instead of
+					// permanently consuming the un-delivered batch.
 				}
-				persist(outcome.state);
 			} else if (outcome.kind === "empty" || outcome.kind === "error") {
 				persist(outcome.state);
 			}
@@ -919,11 +951,23 @@ function refreshStatusSurface(ctx?: ExtensionContext | null) {
 				delivery === "poll" || useRecovery ? (longPollWaitMs(false) ?? 0) : 0;
 			const outcome = await pullAndFormat(state, { waitMs });
 			if (outcome.kind === "injected") {
-				if (!injectedCursors.has(outcome.cursorAfter)) {
-					const queued = queueInject(outcome.content, outcome.cursorAfter, outcome.messageCount);
-					if (queued) injectedCursors.add(outcome.cursorAfter);
+				if (injectedCursors.has(outcome.cursorAfter)) {
+					// Already delivered at this cursor.
+					persist(outcome.state);
+				} else {
+					const queued = queueInject(
+						outcome.content,
+						outcome.cursorAfter,
+						outcome.messageCount,
+						outcome.triggerEligible,
+					);
+					if (queued) {
+						injectedCursors.add(outcome.cursorAfter);
+						persist(outcome.state);
+					}
+					// queueInject returned false (rate/dedupe drop): retain the
+					// prior cursor so the next durable pull retries the batch.
 				}
-				persist(outcome.state);
 			} else if (outcome.kind === "empty" || outcome.kind === "error") {
 				persist(outcome.state);
 			}
@@ -945,12 +989,25 @@ function refreshStatusSurface(ctx?: ExtensionContext | null) {
 		try {
 			const outcome = await pullAndFormat(state, { waitMs: 0 });
 			if (outcome.kind === "injected") {
-				if (!injectedCursors.has(outcome.cursorAfter)) {
-					queueInject(outcome.content, outcome.cursorAfter, outcome.messageCount);
-					injectedCursors.add(outcome.cursorAfter);
+				if (injectedCursors.has(outcome.cursorAfter)) {
+					// Already delivered at this cursor.
+					persist(outcome.state);
+					return { newMessages: outcome.messageCount };
 				}
-				persist(outcome.state);
-				return { newMessages: outcome.messageCount };
+				const queued = queueInject(
+					outcome.content,
+					outcome.cursorAfter,
+					outcome.messageCount,
+					outcome.triggerEligible,
+				);
+				if (queued) {
+					injectedCursors.add(outcome.cursorAfter);
+					persist(outcome.state);
+					return { newMessages: outcome.messageCount };
+				}
+				// queueInject returned false (rate/dedupe drop): retain prior cursor
+				// so the next durable pull retries; do NOT record injectedCursors.
+				return { newMessages: 0, error: "rate/dedupe: retry shortly" };
 			}
 			if (outcome.kind === "empty") {
 				persist(outcome.state);
@@ -1064,6 +1121,87 @@ function refreshStatusSurface(ctx?: ExtensionContext | null) {
 
 
 	const { z } = pi.zod;
+	function registerTaskTool(input: {
+		name: string;
+		label: string;
+		serverTool: string;
+		parameters: unknown;
+		build: (params: never) => Record<string, unknown> | { error: string };
+	}) {
+		pi.registerTool({
+			name: input.name,
+			label: input.label,
+			description: `${input.label} via the plugin-bound Huddora agent seat.`,
+			loadMode: "discoverable",
+			approval: "write",
+			parameters: input.parameters,
+			async execute(
+				_toolCallId: string,
+				params: never,
+				_signal: AbortSignal | undefined,
+				_onUpdate: unknown,
+				ctx: ExtensionContext | undefined,
+			) {
+				const args = input.build(params);
+				if ("error" in args) {
+					const message = typeof args.error === "string" ? args.error : "Invalid task arguments";
+					return formatTaskToolResult({ ok: false, message }, input.label);
+				}
+				const target = ctx ?? liveCtx;
+				if (!target) {
+					return formatTaskToolResult(
+						{ ok: false, message: "No active OMP session context for Huddora task action." },
+						input.label,
+					);
+				}
+				if (!(await ensureBridge(target))) {
+					return formatTaskToolResult(
+						{ ok: false, message: "Huddora plugin MCP session unavailable. Run /huddora connect." },
+						input.label,
+					);
+				}
+				const result = await withAgentBind(() => huddoraCall(input.serverTool, args));
+				return formatTaskToolResult(result, input.label);
+			},
+		} as Parameters<ExtensionAPI["registerTool"]>[0]);
+	}
+
+	registerTaskTool({
+		name: "huddora_task_list",
+		label: "Huddora · List tasks",
+		serverTool: "task_list",
+		parameters: z.object({ room_id: z.string(), status: z.string().optional() }),
+		build: buildTaskListArgs,
+	});
+	registerTaskTool({
+		name: "huddora_task_accept",
+		label: "Huddora · Accept task",
+		serverTool: "task_accept",
+		parameters: z.object({ task_id: z.string() }),
+		build: buildTaskAcceptArgs,
+	});
+	registerTaskTool({
+		name: "huddora_task_handoff",
+		label: "Huddora · Handoff task",
+		serverTool: "task_handoff",
+		parameters: z.object({ task_id: z.string(), target_agent_id: z.string() }),
+		build: buildTaskHandoffArgs,
+	});
+	registerTaskTool({
+		name: "huddora_task_complete",
+		label: "Huddora · Complete task",
+		serverTool: "task_complete",
+		parameters: z.object({ task_id: z.string(), result_message_id: z.string().optional() }),
+		build: buildTaskCompleteArgs,
+	});
+	registerTaskTool({
+		name: "huddora_task_fail",
+		label: "Huddora · Fail task",
+		serverTool: "task_fail",
+		parameters: z.object({ task_id: z.string(), failure_reason: z.string().optional() }),
+		build: buildTaskFailArgs,
+	});
+
 	// Cast: pi.zod + ToolDefinition generics can exceed TS instantiation depth.
 	pi.registerTool({
 		name: "huddora_message_send",

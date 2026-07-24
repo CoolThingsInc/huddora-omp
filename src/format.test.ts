@@ -16,7 +16,7 @@ function msg(partial: Partial<RoomMessage> & Pick<RoomMessage, "cursor" | "body"
 		message_id: partial.message_id ?? `m-${partial.cursor}`,
 		room_id: partial.room_id ?? "11111111-1111-1111-1111-111111111111",
 		cursor: partial.cursor,
-		author_id: partial.author_id ?? "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		author_id: partial.author_id !== undefined ? partial.author_id : "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		author_name: partial.author_name ?? "Alice",
 		body: partial.body,
 		client_message_id: partial.client_message_id ?? `c-${partial.cursor}`,
@@ -121,6 +121,43 @@ describe("formatRoomChatInjection", () => {
 		expect(text).not.toContain("short_id=");
 	});
 
+	test("null author_id renders 'unknown' without slicing null (human)", () => {
+		// Former-member/deleted-account rows: author_id null, no name fallbacks.
+		const text = formatRoomChatInjection({
+			roomId: "r1",
+			roomName: "Ops",
+			messages: [
+				msg({ cursor: 7, author_id: null, author_name: "", owner_name: null, body: "ghost" }),
+			],
+			cursorAfter: 7,
+		});
+		expect(text).toContain("author=unknown");
+		expect(text).toContain("data=untrusted");
+		expect(text).toContain("ghost");
+	});
+
+	test("null author_id agent row renders owner fallback then 'unknown'", () => {
+		const text = formatRoomChatInjection({
+			roomId: "r1",
+			roomName: "Ops",
+			messages: [
+				msg({
+					cursor: 8,
+					author_id: null,
+					author_name: "",
+					owner_name: null,
+					actor_kind: "agent",
+					agent_name: null,
+					agent_id: "ag-1",
+					body: "agent ghost post",
+				}),
+			],
+			cursorAfter: 8,
+		});
+		// agent fallback "agent" + owner fallback "unknown" (author_id null).
+		expect(text).toContain("agent · @unknown");
+	});
+
 	test("batch >1 keeps denser multi-msg with cursor_after", () => {
 		const text = formatRoomChatInjection({
 			roomId: "r1",
@@ -147,12 +184,14 @@ describe("formatRoomChatInjection", () => {
 					cursor: 10,
 					body: "re: that",
 					author_name: "Bob",
-					reply_to: {
-						message_id: "parent-uuid-should-not-appear",
-						cursor: 7,
-						author_name: "Alice",
-						snippet: "hello there",
-					},
+				reply_to: {
+					message_id: "parent-uuid-should-not-appear",
+					cursor: 7,
+					author_name: "Alice",
+					snippet: "hello there",
+					actor_kind: "human",
+					agent_id: null,
+				},
 					mentions: [
 						{ kind: "human", id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", name: "Alice" },
 						{ kind: "agent", id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", name: "Bot" },
@@ -197,18 +236,20 @@ describe("formatRoomChatInjection", () => {
 			roomName: "Ops",
 			messages: [
 				msg({ cursor: 1, body: "one", author_name: "A" }),
-				msg({
-					cursor: 2,
-					body: "two",
-					author_name: "B",
-					reply_to: {
-						message_id: "m1",
-						cursor: 1,
-						author_name: "A",
-						snippet: "one",
-					},
-					mentions: [{ kind: "agent", id: "cccccccc-cccc-cccc-cccc-cccccccccccc", name: "" }],
-				}),
+			msg({
+				cursor: 2,
+				body: "two",
+				author_name: "B",
+				reply_to: {
+					message_id: "m1",
+					cursor: 1,
+					author_name: "A",
+					snippet: "one",
+					actor_kind: "human",
+					agent_id: null,
+				},
+				mentions: [{ kind: "agent", id: "cccccccc-cccc-cccc-cccc-cccccccccccc", name: "" }],
+			}),
 			],
 			cursorAfter: 2,
 		});

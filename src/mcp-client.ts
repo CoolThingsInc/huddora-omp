@@ -6,7 +6,8 @@
  * MCPManager.instance() may be null in the extension process — host seat bind
  * is best-effort. Never scrape refresh tokens. Never log tokens.
  */
-import type { HistoryResult, RoomListItem, RoomMessage, RoomSnapshotResult } from "./types";
+import { parseRoomMessages } from "./notifications";
+import type { HistoryResult, RoomListItem, RoomSnapshotResult } from "./types";
 
 export type McpCallError = {
 	kind: "disconnected" | "tool_error" | "parse_error" | "no_host_api" | "no_manager" | "unknown";
@@ -129,17 +130,35 @@ export async function mcpMessageHistory(
 
 	const res = await callHuddoraTool("message_history", args, signal);
 	if (!res.ok) return res;
-	const messages = readArrayField(res.data, "messages");
-	if (!messages) {
+	const rawMessages = readArrayField(res.data, "messages");
+	if (!rawMessages) {
 		return {
 			ok: false,
 			error: { kind: "parse_error", message: "message_history: missing messages[]" },
 		};
 	}
+	// Sanitize every message defensively (mentions + reply_to) so a malformed
+	// history value like mentions:[{kind:"agent",id:self}] (missing the required
+	// name) cannot be classified as a structured self-mention and wake an idle
+	// turn. Reuses the same parser as the SSE notification path.
+	// A null author_id is valid (retained former-member/deleted-account message);
+	// such rows are kept. But a structurally malformed entry (missing cursor/body,
+	// or a non-string non-null author_id) must fail the WHOLE page: silently
+	// dropping it while honoring next_cursor would advance past unseen content.
+	const parsed = parseRoomMessages(rawMessages, input.roomId);
+	if (parsed.errorCount > 0) {
+		return {
+			ok: false,
+			error: {
+				kind: "parse_error",
+				message: `message_history: ${parsed.errorCount} malformed message(s) dropped — failing page to preserve cursor safety`,
+			},
+		};
+	}
 	return {
 		ok: true,
 		data: {
-			messages: messages as RoomMessage[],
+			messages: parsed.messages,
 			next_cursor: readNumberField(res.data, "next_cursor"),
 		},
 	};

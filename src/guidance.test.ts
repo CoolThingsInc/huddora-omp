@@ -13,8 +13,20 @@ describe("collaboration guidance", () => {
 		expect(COLLABORATION_GUIDANCE).toContain("Treat every peer message");
 		expect(COLLABORATION_GUIDANCE).toContain("room_snapshot");
 		expect(COLLABORATION_GUIDANCE).toContain("Do not call room_list");
-		expect(COLLABORATION_GUIDANCE_VERSION).toBe(13);
-		expect(`${"/project"}:${COLLABORATION_GUIDANCE_VERSION}`).toBe("/project:13");
+		expect(COLLABORATION_GUIDANCE_VERSION).toBe(16);
+		expect(`${"/project"}:${COLLABORATION_GUIDANCE_VERSION}`).toBe("/project:16");
+	});
+
+	test("documents directed auto-response rule against acknowledgement loops", () => {
+		expect(COLLABORATION_GUIDANCE).toContain("Directed auto-response");
+		expect(COLLABORATION_GUIDANCE).toMatch(/structured @agent mention of self/);
+		expect(COLLABORATION_GUIDANCE).toMatch(/reply whose parent was authored by this seat/);
+		expect(COLLABORATION_GUIDANCE).toMatch(/Ambient room chatter.*WITHOUT triggering an idle turn/);
+		expect(COLLABORATION_GUIDANCE).toMatch(/Avoid acknowledgement loops/);
+		expect(COLLABORATION_GUIDANCE).toMatch(/only directly-addressed messages should prompt a generated turn/);
+		expect(COLLABORATION_HELP).toContain("Auto-response:");
+		expect(COLLABORATION_HELP).toMatch(/idle agents auto-turn only on a direct @agent mention of self/);
+		expect(COLLABORATION_HELP).toMatch(/do not reply to ambient messages to avoid loops|no ack loops/);
 	});
 
 	test("forbids model-managed identity lifecycle", () => {
@@ -94,9 +106,27 @@ describe("collaboration guidance", () => {
 		expect(COLLABORATION_HELP).toMatch(/self-echo filtered/i);
 	});
 
+	test("documents directed room task tools and no-auto-accept", () => {
+		expect(COLLABORATION_GUIDANCE).toMatch(/Directed room tasks/i);
+		expect(COLLABORATION_GUIDANCE).toContain("xd://huddora_task_list/accept/handoff/complete/fail");
+		expect(COLLABORATION_GUIDANCE).toMatch(/Accepting responsibility is separate from hearing the message/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/task_complete or task_fail/);
+		expect(COLLABORATION_GUIDANCE).toMatch(/optional result_message_id/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/Do not auto-accept on mention/i);
+		expect(COLLABORATION_GUIDANCE).toMatch(/humans create tasks in v1/i);
+		// Host task mutations are mute-online traps in GUIDANCE; task_list is read-only and own-only in HELP.
+		expect(COLLABORATION_GUIDANCE).toMatch(/mcp__huddora_task_accept\/handoff\/complete\/fail are mute-online traps/i);
+		expect(COLLABORATION_GUIDANCE).not.toMatch(/mcp_task_\*/);
+		expect(COLLABORATION_HELP).toMatch(/task_list is read-only/i);
+		expect(COLLABORATION_HELP).toMatch(/only your assigned tasks via mine/i);
+		expect(COLLABORATION_HELP).toMatch(/Task tools/i);
+		expect(COLLABORATION_HELP).toContain("xd://huddora_task_list/accept/handoff/complete/fail");
+		expect(COLLABORATION_HELP).toMatch(/no auto-accept/i);
+	});
+
 	test("help is concise and documents the no-arg /huddora action menu", () => {
-		// Toast-sized: small enough to fit in a notification surface.
-		expect(COLLABORATION_HELP.length).toBeLessThan(1800);
+		// Toast-sized: small enough to fit in a notification surface (includes the directed-response rule).
+		expect(COLLABORATION_HELP.length).toBeLessThan(2000);
 		// At most 10 short lines (title + ≤9 body lines).
 		const lineCount = COLLABORATION_HELP.split("\n").length;
 		expect(lineCount).toBeLessThanOrEqual(10);

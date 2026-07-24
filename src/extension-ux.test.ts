@@ -13,7 +13,7 @@ describe("Extension UX wiring", () => {
 	test("registers renderers and command with menu options on activation", async () => {
 		const renderers = new Map<string, Function>();
 		let huddoraCommand: any = null;
-		let toolDef: any = null;
+		const tools = new Map<string, any>();
 
 		const piMock: any = {
 			zod: { z: { object: mock().mockReturnValue({ describe: mock() }), string: mock().mockReturnValue({ describe: mock(), optional: mock().mockReturnValue({ describe: mock() }) }) } },
@@ -26,7 +26,7 @@ describe("Extension UX wiring", () => {
 				renderers.set(type, fn);
 			},
 			registerTool: (def: any) => {
-				toolDef = def;
+				tools.set(def.name, def);
 			},
 			registerCommand: (name: string, def: any) => {
 				if (name === "huddora") huddoraCommand = def;
@@ -46,10 +46,20 @@ describe("Extension UX wiring", () => {
 		expect(huddoraCommand.description).toContain("Huddora: init|config|room");
 
 		// Assert tool registered with correct semantics + renderers
+		const toolDef = tools.get("huddora_message_send");
 		expect(toolDef).toBeTruthy();
-		expect(toolDef.name).toBe("huddora_message_send");
 		expect(typeof toolDef.renderCall).toBe("function");
 		expect(typeof toolDef.renderResult).toBe("function");
+		for (const name of [
+			"huddora_task_list",
+			"huddora_task_accept",
+			"huddora_task_handoff",
+			"huddora_task_complete",
+			"huddora_task_fail",
+		]) {
+			expect(tools.get(name)?.loadMode).toBe("discoverable");
+			expect(tools.get(name)?.approval).toBe("write");
+		}
 
 		const fakeTheme = {
 			fg: (c: string, t: string) => `[${c}]${t}[/${c}]`,

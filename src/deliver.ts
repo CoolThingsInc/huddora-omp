@@ -1,8 +1,7 @@
 /**
  * Pure mid-turn delivery policy (no OMP imports).
- * Active → steer; idle → nextTurn + triggerTurn (wake once).
+ * Active → steer; idle → nextTurn + triggerTurn (gated by triggerEligible).
  */
-
 export type DeliverAs = "steer" | "followUp" | "nextTurn";
 
 export type DeliverOptions = {
@@ -25,6 +24,45 @@ export const BATCH_MAX_MESSAGES = 8;
 export const BATCH_MAX_CHARS = 4_000;
 export const DEBOUNCE_MS = 300;
 
+/**
+ * Minimal structural shape for direct-address classification (no full type import).
+ * A message directly addresses this seat when:
+ *   - mentions contains { kind: "agent", id: selfAgentId }, or
+ *   - reply_to.actor_kind == "agent" && reply_to.agent_id == selfAgentId.
+ * reply_to is only ever present with a complete parent identity (actor_kind +
+ * agent_id); a malformed reply is rejected by the sanitizer before this runs.
+ */
+export type ClassifiableMessage = {
+	mentions?: Array<{ kind: "human" | "agent"; id: string; name: string }>;
+	reply_to?: {
+		actor_kind: "human" | "agent";
+		agent_id: string | null;
+	} | null;
+};
+
+/** True iff `m` directly addresses the seat identified by `selfAgentId`. */
+export function classifyDirect(m: ClassifiableMessage, selfAgentId: string | null): boolean {
+	if (!selfAgentId) return false;
+	if (Array.isArray(m.mentions)) {
+		for (const ment of m.mentions) {
+			if (ment && ment.kind === "agent" && ment.id === selfAgentId) return true;
+		}
+	}
+	const rt = m.reply_to;
+	if (rt && rt.actor_kind === "agent" && rt.agent_id && rt.agent_id === selfAgentId) {
+		return true;
+	}
+	return false;
+}
+
+/** A pulled batch is trigger-eligible iff ANY message directly addresses this seat. */
+export function isDirectBatch(messages: ClassifiableMessage[], selfAgentId: string | null): boolean {
+	if (!selfAgentId) return false;
+	for (const m of messages) {
+		if (classifyDirect(m, selfAgentId)) return true;
+	}
+	return false;
+}
 export function chooseDeliverOptions(isIdle: boolean): DeliverOptions {
 	if (!isIdle) {
 		return { deliverAs: "steer", triggerTurn: false };
@@ -47,6 +85,12 @@ export function defaultRateGuard(): RateGuardState {
 /**
  * Returns null when inject should be dropped (rate / identical body).
  * Otherwise returns options + updated guard state.
+ *
+ * `triggerEligible` (default true): when false, an idle ambient batch is injected
+ * as context WITHOUT a turn trigger (no wake). Active sessions keep steer/followUp
+ * regardless — context can steer an ongoing turn. A reply_to with missing
+ * parent identity is rejected by the sanitizer upstream (clean cutover), so
+ * only well-identified messages reach a classifier; ambient stays `triggerEligible:false`.
  */
 export function gateInject(
 	guard: RateGuardState,
@@ -56,16 +100,25 @@ export function gateInject(
 		now?: number;
 		/** Pure telemetry / empty batch — never wake. */
 		noise?: boolean;
+		/** Batch classified as directly addressing this seat. Default true. */
+		triggerEligible?: boolean;
 	},
 ): { options: DeliverOptions; guard: RateGuardState } | null {
 	const now = opts.now ?? Date.now();
 	if (opts.noise) return null;
+
+	const triggerEligible = opts.triggerEligible !== false;
 
 	const hash = simpleBodyHash(opts.content);
 	if (guard.lastBodyHash === hash) return null;
 
 	const windowStart = now - 60_000;
 	const recent = guard.injectTimes.filter((t) => t >= windowStart);
+	// The per-minute cap bounds WAKES, not context-only injections: ambient
+	// idle batches never consume a slot (handled below), so the cap is only
+	// ever reached by genuine direct/eligible wakes — preserving both the
+	// existing backpressure and a direct wake that arrives after a stream of
+	// ambient context injections (which left the counter at zero).
 	if (recent.length >= RATE_MAX_INJECTS_PER_MIN) {
 		// Over rate: only allow followUp park while streaming; never wake idle.
 		if (opts.isIdle) return null;
@@ -93,10 +146,19 @@ export function gateInject(
 		};
 	}
 
+	// Idle ambient batch (no direct address): inject context, do NOT trigger a
+	// turn AND do NOT consume the wake budget — otherwise six ambient batches
+	// could starve the next direct eligible idle wake (see ambient-then-direct).
+	let options = base;
+	const isAmbientIdleContext = opts.isIdle && base.deliverAs === "nextTurn" && !triggerEligible;
+	if (isAmbientIdleContext) {
+		options = { deliverAs: "nextTurn", triggerTurn: false };
+	}
+
 	return {
-		options: base,
+		options,
 		guard: {
-			injectTimes: [...recent, now],
+			injectTimes: isAmbientIdleContext ? recent : [...recent, now],
 			lastSteerAt: base.deliverAs === "steer" ? now : guard.lastSteerAt,
 			lastBodyHash: hash,
 		},

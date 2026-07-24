@@ -7,12 +7,22 @@ import {
 } from "./host-tools";
 
 describe("isHostHuddoraMuteTrapTool", () => {
-	test("message_send + identity tools", () => {
+	test("message_send, identity, and task mutation tools", () => {
 		expect(isHostHuddoraMuteTrapTool("mcp__huddora_message_send")).toBe(true);
 		expect(isHostHuddoraMuteTrapTool("mcp__huddora_agent_register")).toBe(true);
 		expect(isHostHuddoraMuteTrapTool("mcp__huddora_agent_heartbeat")).toBe(true);
+		expect(isHostHuddoraMuteTrapTool("mcp__huddora_task_accept")).toBe(true);
+		expect(isHostHuddoraMuteTrapTool("mcp__huddora_task_handoff")).toBe(true);
+		expect(isHostHuddoraMuteTrapTool("mcp__huddora_task_complete")).toBe(true);
+		expect(isHostHuddoraMuteTrapTool("mcp__huddora_task_fail")).toBe(true);
+	});
+
+	test("read-only and plugin-bridge tools are not traps", () => {
+		// task_list is read-only and the plugin surface pins mine=true, so it stays available.
+		expect(isHostHuddoraMuteTrapTool("mcp__huddora_task_list")).toBe(false);
 		expect(isHostHuddoraMuteTrapTool("mcp__huddora_room_list")).toBe(false);
 		expect(isHostHuddoraMuteTrapTool("huddora_message_send")).toBe(false);
+		expect(isHostHuddoraMuteTrapTool("huddora_task_accept")).toBe(false);
 	});
 });
 
@@ -22,13 +32,17 @@ describe("filterActiveToolsForSeat", () => {
 		"mcp__huddora_message_send",
 		"mcp__huddora_room_list",
 		"mcp__huddora_agent_register",
+		"mcp__huddora_task_accept",
+		"mcp__huddora_task_complete",
+		"mcp__huddora_task_list",
 		"huddora_message_send",
 	];
 
-	test("strips mute traps when plugin seat held and host unbound", () => {
+	test("strips mute traps (incl. task mutations) when plugin seat held and host unbound", () => {
+		// task_list is read-only and survives; task_accept/complete are stripped with the rest.
 		expect(
 			filterActiveToolsForSeat({ active, hostSeatBound: false, pluginSeatHeld: true }),
-		).toEqual(["read", "mcp__huddora_room_list", "huddora_message_send"]);
+		).toEqual(["read", "mcp__huddora_room_list", "mcp__huddora_task_list", "huddora_message_send"]);
 	});
 
 	test("keeps all when host bound", () => {
@@ -45,14 +59,27 @@ describe("filterActiveToolsForSeat", () => {
 });
 
 describe("mergeHostToolsWhenBound", () => {
-	test("re-adds host tools from catalog", () => {
+	test("re-adds host tools from catalog (incl. task mutations)", () => {
 		const next = mergeHostToolsWhenBound({
 			active: ["read", "huddora_message_send"],
-			all: ["read", "mcp__huddora_message_send", "mcp__huddora_agent_register", "huddora_message_send"],
+			all: [
+				"read",
+				"mcp__huddora_message_send",
+				"mcp__huddora_agent_register",
+				"mcp__huddora_task_accept",
+				"mcp__huddora_task_handoff",
+				"mcp__huddora_task_complete",
+				"mcp__huddora_task_fail",
+				"huddora_message_send",
+			],
 			hostSeatBound: true,
 		});
 		expect(next).toContain("mcp__huddora_message_send");
 		expect(next).toContain("mcp__huddora_agent_register");
+		expect(next).toContain("mcp__huddora_task_accept");
+		expect(next).toContain("mcp__huddora_task_handoff");
+		expect(next).toContain("mcp__huddora_task_complete");
+		expect(next).toContain("mcp__huddora_task_fail");
 		expect(next).toContain("read");
 	});
 

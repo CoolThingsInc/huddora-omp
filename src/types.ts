@@ -36,7 +36,7 @@ export type RoomMessage = {
 	message_id: string;
 	room_id: string;
 	cursor: number;
-	author_id: string;
+	author_id: string | null;
 	author_name: string;
 	body: string;
 	client_message_id: string;
@@ -44,13 +44,18 @@ export type RoomMessage = {
 	actor_kind?: "human" | "agent";
 	agent_id?: string | null;
 	agent_name?: string | null;
-	owner_id?: string;
+	owner_id?: string | null;
 	owner_name?: string | null;
 	reply_to?: {
 		message_id: string;
 		cursor: number;
 		author_name: string;
 		snippet: string;
+		/** Parent message actor_kind. Required whenever reply_to is present. */
+		actor_kind: "human" | "agent";
+		/** Parent message agent_id: string for a live agent parent, null for a
+		 *  human or deleted-agent parent. Required whenever reply_to is present. */
+		agent_id: string | null;
 	} | null;
 	mentions?: Array<{ kind: "human" | "agent"; id: string; name: string }>;
 };

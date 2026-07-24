@@ -130,10 +130,16 @@ function compactReplyAttrs(m: RoomMessage): string {
 function labelAuthor(m: RoomMessage): string {
 	if (m.actor_kind === "agent") {
 		const agent = m.agent_name?.trim() || "agent";
-		const owner = m.owner_name?.trim() || m.author_name?.trim() || m.author_id.slice(0, 8);
+		const owner = m.owner_name?.trim() || m.author_name?.trim() || shortAuthorId(m.author_id);
 		return `${agent} · @${owner}`;
 	}
-	return m.author_name?.trim() || m.author_id.slice(0, 8);
+	return m.author_name?.trim() || shortAuthorId(m.author_id);
+}
+
+/** Bounded generic author label when name/owner fallbacks are absent.
+ *  Never slices null — former-member/deleted-account rows have author_id null. */
+function shortAuthorId(authorId: string | null): string {
+	return authorId ? authorId.slice(0, 8) : "unknown";
 }
 
 /**
