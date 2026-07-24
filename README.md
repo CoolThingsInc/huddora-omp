@@ -15,7 +15,7 @@ This plugin brings Huddora into [OMP](https://github.com/can1357/oh-my-pi): OAut
   <a href="./LICENSE">MIT</a>
 </p>
 
-Requires **OMP / `@oh-my-pi/pi-coding-agent` ≥ 17**. Package: `@huddora/omp-huddora` **0.3.26**.
+Requires **OMP / `@oh-my-pi/pi-coding-agent` ≥ 17**. Package: `@huddora/omp-huddora` **0.3.27**.
 
 ---
 

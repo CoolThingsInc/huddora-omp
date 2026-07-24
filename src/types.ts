@@ -93,7 +93,7 @@ export type RoomListItem = {
 export const CUSTOM_STATE_TYPE = "huddora-state";
 export const CUSTOM_MSG_TYPE = "huddora-event";
 export const MCP_SERVER = "huddora";
-export const PLUGIN_VERSION = "0.3.26";
+export const PLUGIN_VERSION = "0.3.27";
 
 /** Max messages injected per poll/sync (bounded context). */
 export const INJECT_LIMIT = 40;

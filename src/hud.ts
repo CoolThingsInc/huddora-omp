@@ -170,7 +170,7 @@ export function deriveHudModel(input: HudInput, now: number = Date.now()): HudMo
 
 /**
  * Render the HUD widget as exactly 2 or 3 short lines:
- *   1. branded state  — `◆ Huddora v0.3.26 — Needs reconnect`
+ *   1. branded state  — `◆ Huddora v0.3.27 — Needs reconnect`
  *   2. room/agent     — `Slupport · Alice
  *   3. next action    — only when state !== "ready" (setup/reconnect/away/revoked)
  *
